@@ -1,0 +1,16 @@
+datasets:
+  years: [2025]
+
+gold:
+  mode: full
+  supply_demand:
+    block_minutes: 15
+    deficit_threshold: -10
+  abc_xyz:
+    class_a_pct: 0.80
+    class_b_pct: 0.15
+    xyz_x_max: 0.2
+    xyz_y_max: 0.5
+  generosity:
+    standard_low: 10
+    standard_high: 18
