@@ -14,3 +14,9 @@ gold:
   generosity:
     standard_low: 10
     standard_high: 18
+  isolation_fraud:
+    contamination: 0.05
+    n_estimators: 100
+    max_samples: auto
+    random_state: 42
+    min_rows_per_ratecode: 200

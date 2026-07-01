@@ -21,10 +21,12 @@ uv run main.py --silver load   # build star-schema facts → data/silver/star/fa
 uv run main.py --gold          # gold (full): Power BI marts + ML feature stores → data/gold/
 uv run main.py --gold incremental                                       # only missing trip-grain partitions
 uv run main.py --gold --only mart_demand_volume,ml_feat_isolation_fraud # subset of builders
+uv run main.py --gold-ml       # train Isolation Forest per RatecodeID (needs ml_feat_isolation_fraud first)
 ```
 
-Order: `bronze → --silver → --silver schema → --silver load → --gold`. `--silver schema`
+Order: `bronze → --silver → --silver schema → --silver load → --gold → --gold-ml`. `--silver schema`
 must precede `--silver load`; `--gold` reads `data/silver/star/` and aborts cleanly if missing.
+`--gold-ml` requires `ml_feat_isolation_fraud` (run `--gold --only ml_feat_isolation_fraud` first).
 
 ## `app.` package (flat, no `src/`)
 
@@ -41,6 +43,8 @@ must precede `--silver load`; `--gold` reads `data/silver/star/` and aborts clea
 | `app.pipeline.gold.gold_pipeline` | `GoldPipeline` | Gold orchestrator: 6 marts + 3 ML feature stores |
 | `app.pipeline.gold.mart_builder` | `GoldBuilder`, `TripGrainMart`, `GoldContext` | Builder bases + shared context/helpers |
 | `app.pipeline.gold.dims.gold_dimensions` | `GoldDimensionsBuilder` | `dim_date_gold`, `dim_zone_gold`, `dim_ratecode_theoretical` |
+| `app.pipeline.gold.ml.isolation_forest_model` | `IsolationForestModelPipeline` | Trains sklearn IsolationForest per RatecodeID, writes scores + `model.joblib` |
+| `app.utils.settings` | `Settings` | Loads `config.yaml` → `SettingsSchema` (pydantic) |
 | `app.utils.spark` | `SparkClient` | PySpark session, `local[4]`, driver 6g, shuffles 64 |
 | `app.utils.logger` | `Logger` | Singleton, file+console |
 | `app.utils.globals` | `Globals` (instance: `globals`) | `tlc_categories`: green, yellow, fhv, fhvhv |
@@ -87,20 +91,18 @@ must precede `--silver load`; `--gold` reads `data/silver/star/` and aborts clea
   `spark.local.dir=data/.spark_temp` (avoids small `/tmp` quota during shuffle). The gold layer also sets
   `spark.sql.sources.partitionOverwriteMode=dynamic` for idempotent per-partition writes. On Windows,
   requires `HADOOP_HOME` pointing to a Hadoop bin dir with `hadoop.dll`/`winutils` (bundled in `lib/hadoop/`).
-- **Reusable heuristics** — silver/profiling rules in `app/profiling/rules/`; gold heuristics in
-  `app/pipeline/gold/feature_rules/`. Single source of truth — don't duplicate inline.
 
 ## Config
 
 `config.yaml` — `datasets.years` is a list of plain `int` years (expands to 4 categories × 12 months) or
 `Module` objects (`{category, year, month}`) for a single category/year. Optional `gold:` section
 (`GoldConfig`) parametrizes the gold layer (block minutes, deficit threshold, ABC/XYZ cutoffs, generosity
-thresholds); defaults apply if omitted.
+thresholds, isolation-fraud hyperparams); defaults apply if omitted.
 
 ## Stack
 
 Python 3.12, managed with **uv**. **Java JDK 11+** required by PySpark. Dependencies: `httpx`, `pandas`,
-`polars`, `pyarrow`, `pydantic`, `pyspark`, `pyyaml`. No test framework, linter, formatter, or CI configured.
+`polars`, `pyarrow`, `pydantic`, `pyspark`, `pyyaml`, `scikit-learn`, `joblib`, `ipykernel`. No test framework, linter, formatter, or CI configured.
 
 ## Conventions
 

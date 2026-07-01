@@ -2,6 +2,8 @@ import argparse
 import asyncio
 
 from app.pipeline.bronze import BronzePipeline
+from app.pipeline.gold.ml.isolation_forest_model import IsolationForestModelPipeline
+from app.pipeline.gold.ml.sarimax_model import SariMaxModelPipeline
 from app.pipeline.silver import SilverPipeline
 from app.profiling.profiling_pipeline import ProfilingPipeline
 from app.utils.logger import Logger
@@ -95,6 +97,35 @@ def run_gold_pipeline(mode: str, only: list[str] | None) -> None:
     logger.info("Auditoría en data/gold/audit.parquet")
 
 
+def run_gold_ml_pipeline(which: str) -> None:
+    logger = Logger()
+    settings = Settings()
+
+    if which == "isolation":
+        logger.info("Iniciando Isolation Forest sobre ml_feat_isolation_fraud")
+        logger.info(f"Años configurados: {settings.config.datasets.years}")
+
+        pipeline = IsolationForestModelPipeline(settings.config)
+        result = pipeline.run()
+
+        if result >= 0:
+            logger.info("Pipeline gold ML completado")
+            logger.info("Scores en data/gold/ml/ml_isolation_fraud_scores/")
+            logger.info("Modelos en data/gold/models/isolation_forest/")
+    elif which == "sarimax":
+        logger.info("Iniciando SARIMAX trip-count forecaster sobre ml_feat_arima_trips")
+        logger.info(f"Años configurados: {settings.config.datasets.years}")
+
+        pipeline = SariMaxModelPipeline(settings.config)
+        result = pipeline.run()
+
+        if result >= 0:
+            logger.info("Pipeline gold ML completado")
+            logger.info(
+                "Predicciones en data/gold/ml/ml_sarimax_trips_forecast/")
+            logger.info("Modelos en data/gold/models/sarimax/")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="ETL pipeline para NY TLC Trip Record Data"
@@ -125,6 +156,14 @@ def main() -> None:
         default=None,
         help="Lista separada por comas de marts/features a construir (solo con --gold)",
     )
+    parser.add_argument(
+        "--gold-ml",
+        nargs="?",
+        const="isolation",
+        default=None,
+        choices=["isolation", "sarimax"],
+        help="Entrenar modelos ML: isolation (default) o sarimax",
+    )
     args = parser.parse_args()
 
     if args.silver:
@@ -137,6 +176,8 @@ def main() -> None:
     elif args.gold is not None:
         only = [s.strip() for s in args.only.split(",")] if args.only else None
         run_gold_pipeline(args.gold, only)
+    elif args.gold_ml is not None:
+        run_gold_ml_pipeline(args.gold_ml)
     elif args.profile:
         asyncio.run(run_profiling_pipeline())
     else:

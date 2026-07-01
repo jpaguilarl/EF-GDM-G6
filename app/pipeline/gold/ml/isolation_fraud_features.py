@@ -41,6 +41,7 @@ class IsolationFraudFeatures(TripGrainMart):
         dist = col_or_null(df, "trip_distance")
         ratecode = col_or_null(df, "ratecode_id", "int")
         flat_fare = F.col("flat_fare")
+        tolls = col_or_null(df, "tolls_amount")
 
         dur_seg = F.unix_timestamp("dropoff_datetime") - F.unix_timestamp(
             "pickup_datetime"
@@ -51,6 +52,9 @@ class IsolationFraudFeatures(TripGrainMart):
         costo = F.round(fare / (dist + F.lit(0.001)), 4)
         desviacion = rt.desviacion_tarifa_teorica(fare, flat_fare)
         candidate = rt.is_anomaly_candidate(ratecode, fare, flat_fare, velocidad, costo)
+        ratio_peaje = F.when(
+            fare > 0, F.round(tolls / fare, 4)
+        ).otherwise(F.lit(None).cast("double"))
 
         return df.select(
             F.col("trip_id"),
@@ -63,11 +67,13 @@ class IsolationFraudFeatures(TripGrainMart):
             dur_seg.alias("duracion_viaje_segundos"),
             dist.alias("trip_distance"),
             fare.alias("fare_amount"),
+            tolls.alias("tolls_amount"),
             col_or_null(df, "extra").alias("extra"),
             col_or_null(df, "mta_tax").alias("mta_tax"),
             col_or_null(df, "improvement_surcharge").alias("improvement_surcharge"),
             velocidad.alias("velocidad_promedio_calculada"),
             costo.alias("costo_por_distancia"),
+            ratio_peaje.alias("ratio_peaje_tarifa"),
             desviacion.alias("desviacion_tarifa_teorica"),
             candidate.alias("is_anomaly_candidate"),
             F.lit(year).alias("year"),
