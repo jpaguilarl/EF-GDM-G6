@@ -43,6 +43,14 @@ class SariMaxConfig(BaseModel):
     forecast_horizon_hours: int = 168
 
 
+class KmodesConfig(BaseModel):
+    max_k: int = 8
+    max_sample_per_service: int = 100_000
+    n_init: int = 2
+    init_method: str = "Cao"
+    random_state: int = 42
+
+
 class GoldConfig(BaseModel):
     mode: str = "full"
     supply_demand: SupplyDemandConfig = Field(default_factory=SupplyDemandConfig)
@@ -50,6 +58,7 @@ class GoldConfig(BaseModel):
     generosity: GenerosityConfig = Field(default_factory=GenerosityConfig)
     isolation_fraud: IsolationFraudConfig = Field(default_factory=IsolationFraudConfig)
     sarimax: SariMaxConfig = Field(default_factory=SariMaxConfig)
+    kmodes: KmodesConfig = Field(default_factory=KmodesConfig)
 
 
 class SettingsSchema(BaseModel):

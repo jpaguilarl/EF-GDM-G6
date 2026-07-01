@@ -3,6 +3,7 @@ import asyncio
 
 from app.pipeline.bronze import BronzePipeline
 from app.pipeline.gold.ml.isolation_forest_model import IsolationForestModelPipeline
+from app.pipeline.gold.ml.kmodes_model import KModesModelPipeline
 from app.pipeline.gold.ml.sarimax_model import SariMaxModelPipeline
 from app.pipeline.silver import SilverPipeline
 from app.profiling.profiling_pipeline import ProfilingPipeline
@@ -112,6 +113,17 @@ def run_gold_ml_pipeline(which: str) -> None:
             logger.info("Pipeline gold ML completado")
             logger.info("Scores en data/gold/ml/ml_isolation_fraud_scores/")
             logger.info("Modelos en data/gold/models/isolation_forest/")
+    elif which == "kmodes":
+        logger.info("Iniciando K-Modes sobre ml_feat_kmodes_trips")
+        logger.info(f"Años configurados: {settings.config.datasets.years}")
+
+        pipeline = KModesModelPipeline(settings.config)
+        result = pipeline.run()
+
+        if result >= 0:
+            logger.info("Pipeline gold ML completado")
+            logger.info("Labels en data/gold/ml/kmodes_model/labels_*/")
+            logger.info("Modelos en data/gold/models/kmodes/")
     elif which == "sarimax":
         logger.info("Iniciando SARIMAX trip-count forecaster sobre ml_feat_arima_trips")
         logger.info(f"Años configurados: {settings.config.datasets.years}")
@@ -159,10 +171,10 @@ def main() -> None:
     parser.add_argument(
         "--gold-ml",
         nargs="?",
-        const="isolation",
+        const="kmodes",
         default=None,
-        choices=["isolation", "sarimax"],
-        help="Entrenar modelos ML: isolation (default) o sarimax",
+        choices=["kmodes", "isolation", "sarimax"],
+        help="Entrenar modelos ML: kmodes (default), isolation, o sarimax",
     )
     args = parser.parse_args()
 

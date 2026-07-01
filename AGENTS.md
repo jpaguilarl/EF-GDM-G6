@@ -21,12 +21,14 @@ uv run main.py --silver load   # build star-schema facts → data/silver/star/fa
 uv run main.py --gold          # gold (full): Power BI marts + ML feature stores → data/gold/
 uv run main.py --gold incremental                                       # only missing trip-grain partitions
 uv run main.py --gold --only mart_demand_volume,ml_feat_isolation_fraud # subset of builders
-uv run main.py --gold-ml       # train Isolation Forest per RatecodeID (needs ml_feat_isolation_fraud first)
+uv run main.py --gold-ml kmodes            # train K-Modes (default: cluster trip profiles, needs ml_feat_kmodes_trips first)
+uv run main.py --gold-ml isolation         # train Isolation Forest per RatecodeID (needs ml_feat_isolation_fraud first)
+uv run main.py --gold-ml sarimax           # train SARIMAX trip-count forecaster (needs ml_feat_arima_trips first)
 ```
 
 Order: `bronze → --silver → --silver schema → --silver load → --gold → --gold-ml`. `--silver schema`
 must precede `--silver load`; `--gold` reads `data/silver/star/` and aborts cleanly if missing.
-`--gold-ml` requires `ml_feat_isolation_fraud` (run `--gold --only ml_feat_isolation_fraud` first).
+`--gold-ml kmodes` requires `ml_feat_kmodes_trips` (run `--gold --only ml_feat_kmodes_trips` first).
 
 ## `app.` package (flat, no `src/`)
 
@@ -44,6 +46,7 @@ must precede `--silver load`; `--gold` reads `data/silver/star/` and aborts clea
 | `app.pipeline.gold.mart_builder` | `GoldBuilder`, `TripGrainMart`, `GoldContext` | Builder bases + shared context/helpers |
 | `app.pipeline.gold.dims.gold_dimensions` | `GoldDimensionsBuilder` | `dim_date_gold`, `dim_zone_gold`, `dim_ratecode_theoretical` |
 | `app.pipeline.gold.ml.isolation_forest_model` | `IsolationForestModelPipeline` | Trains sklearn IsolationForest per RatecodeID, writes scores + `model.joblib` |
+| `app.pipeline.gold.ml.kmodes_model` | `KModesModelPipeline` | Trains KModes per service, elbow+silhouette tuning, writes labels + centroids + profiles |
 | `app.utils.settings` | `Settings` | Loads `config.yaml` → `SettingsSchema` (pydantic) |
 | `app.utils.spark` | `SparkClient` | PySpark session, `local[4]`, driver 6g, shuffles 64 |
 | `app.utils.logger` | `Logger` | Singleton, file+console |
@@ -68,10 +71,11 @@ must precede `--silver load`; `--gold` reads `data/silver/star/` and aborts clea
   fact carries a `trip_id` (sha2 of `SilverCleaner.COMPOSITE_KEYS`) and standardized
   `pickup_datetime`/`dropoff_datetime` timestamps (the gold layer depends on this).
 - **GoldPipeline** — reads silver star facts/dims, builds gold dims, then 6 wide Power BI marts
-  (`data/gold/marts/`) + 3 ML feature stores (`data/gold/ml/`). Trip-grain builders subclass `TripGrainMart`
-  (idempotent per-partition writes via `partitionOverwriteMode=dynamic`); aggregate builders (supply/demand,
-  ABC/XYZ, ARIMA) subclass `GoldBuilder` and always recompute the whole history. Audit at
-  `data/gold/audit.parquet` (FK `silver_audit_id`).
+  (`data/gold/marts/`) + 3 ML feature stores + ML models (`data/gold/ml/`, `data/gold/models/`).
+  Trip-grain builders subclass `TripGrainMart` (idempotent per-partition writes via
+  `partitionOverwriteMode=dynamic`); aggregate builders (supply/demand, ABC/XYZ, ARIMA) subclass
+  `GoldBuilder` and always recompute the whole history. Audit at `data/gold/audit.parquet`
+  (FK `silver_audit_id`).
 - **Schema heterogeneity** — column names differ across categories/years (`tpep_pickup_datetime` vs
   `lpep_pickup_datetime` vs `pickup_datetime`; `PULocationID` vs `PUlocationID`). Code resolves these via
   candidate-list + `_first_match` helper. Follow this pattern; never hardcode a single column name across
@@ -84,7 +88,7 @@ must precede `--silver load`; `--gold` reads `data/silver/star/` and aborts clea
   (`nullability.py`, `reasonableness_ranges.py`, `amount_components.py`) are the **single source of truth**
   consumed by *both* profiling dimensions and the silver cleaner — change a rule here, not in two places.
   Gold heuristics live in `app/pipeline/gold/feature_rules/` (`time_blocks.py`, `generosity.py`,
-  `ratecode_tariff.py`) — same rule: define there, don't inline in a mart.
+  `ratecode_tariff.py`, `passenger_groups.py`) — same rule: define there, don't inline in a mart.
 - **Spark day-of-week quirk** — use `time_blocks.iso_weekday()` for day-of-week, **not**
   `date_format(ts, "u")` (`'u'` is not day-of-week in Spark's proleptic datetime patterns).
 - **SparkClient** — `master=local[4]`, `spark.driver.memory=6g`, `spark.sql.shuffle.partitions=64`,
@@ -97,12 +101,13 @@ must precede `--silver load`; `--gold` reads `data/silver/star/` and aborts clea
 `config.yaml` — `datasets.years` is a list of plain `int` years (expands to 4 categories × 12 months) or
 `Module` objects (`{category, year, month}`) for a single category/year. Optional `gold:` section
 (`GoldConfig`) parametrizes the gold layer (block minutes, deficit threshold, ABC/XYZ cutoffs, generosity
-thresholds, isolation-fraud hyperparams); defaults apply if omitted.
+thresholds, isolation-fraud hyperparams, kmodes params); defaults apply if omitted.
 
 ## Stack
 
-Python 3.12, managed with **uv**. **Java JDK 11+** required by PySpark. Dependencies: `httpx`, `pandas`,
-`polars`, `pyarrow`, `pydantic`, `pyspark`, `pyyaml`, `scikit-learn`, `joblib`, `ipykernel`. No test framework, linter, formatter, or CI configured.
+Python 3.12, managed with **uv**. **Java JDK 11+** required by PySpark. Dependencies: `httpx`, `kmodes`,
+`pandas`, `polars`, `pyarrow`, `pydantic`, `pyspark`, `pyyaml`, `scikit-learn`, `joblib`, `ipykernel`.
+No test framework, linter, formatter, or CI configured.
 
 ## Conventions
 

@@ -172,6 +172,7 @@ dependencies = [
     { name = "httpx" },
     { name = "ipykernel" },
     { name = "joblib" },
+    { name = "kmodes" },
     { name = "pandas" },
     { name = "polars" },
     { name = "pyarrow" },
@@ -187,6 +188,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "ipykernel", specifier = ">=7.3.0" },
     { name = "joblib", specifier = ">=1.4.0" },
+    { name = "kmodes", specifier = ">=0.12.2" },
     { name = "pandas", specifier = ">=3.0.3" },
     { name = "polars", specifier = ">=1.42.0" },
     { name = "pyarrow", specifier = ">=24.0.0" },
@@ -359,6 +361,21 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/02/49/9d1284d0dc65e2c757b74c6687b6d319b02f822ad039e5c512df9194d9dd/jupyter_core-5.9.1.tar.gz", hash = "sha256:4d09aaff303b9566c3ce657f580bd089ff5c91f5f89cf7d8846c3cdf465b5508", size = 89814, upload-time = "2025-10-16T19:19:18.444Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e7/e7/80988e32bf6f73919a113473a604f5a8f09094de312b9d52b79c2df7612b/jupyter_core-5.9.1-py3-none-any.whl", hash = "sha256:ebf87fdc6073d142e114c72c9e29a9d7ca03fad818c5d300ce2adc1fb0743407", size = 29032, upload-time = "2025-10-16T19:19:16.783Z" },
+]
+
+[[package]]
+name = "kmodes"
+version = "0.12.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "joblib" },
+    { name = "numpy" },
+    { name = "scikit-learn" },
+    { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5c/16/e2b5222bb5efabc56259215bbc9e94df9ee08a43b5a9ed33aae28ce2dade/kmodes-0.12.2.tar.gz", hash = "sha256:d840ac9f4616a668ebacba24a12ec1def87da24a9fd0a0dc2f7499a9b9a6f45b", size = 18883, upload-time = "2022-09-06T19:36:37.14Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1a/a8/0d3bf6f3340cbcb8cf4ad02c306d157af8f09ce86aadf5346e00605870dd/kmodes-0.12.2-py2.py3-none-any.whl", hash = "sha256:b764f7166dd5fe63826135ed74df796693dc7c25fc2cb8a106e14f3bfb371004", size = 20408, upload-time = "2022-09-06T19:36:34.956Z" },
 ]
 
 [[package]]

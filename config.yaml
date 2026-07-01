@@ -20,3 +20,9 @@ gold:
     max_samples: auto
     random_state: 42
     min_rows_per_ratecode: 200
+  kmodes:
+    max_k: 8
+    max_sample_per_service: 100000
+    n_init: 2
+    init_method: Cao
+    random_state: 42
