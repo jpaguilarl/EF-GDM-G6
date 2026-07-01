@@ -47,6 +47,7 @@ must precede `--silver load`; `--gold` reads `data/silver/star/` and aborts clea
 | `app.pipeline.gold.dims.gold_dimensions` | `GoldDimensionsBuilder` | `dim_date_gold`, `dim_zone_gold`, `dim_ratecode_theoretical` |
 | `app.pipeline.gold.ml.isolation_forest_model` | `IsolationForestModelPipeline` | Trains sklearn IsolationForest per RatecodeID, writes scores + `model.joblib` |
 | `app.pipeline.gold.ml.kmodes_model` | `KModesModelPipeline` | Trains KModes per service, elbow+silhouette tuning, writes labels + centroids + profiles |
+| `app.pipeline.gold.ml.sarimax_model` | `SariMaxModelPipeline` | Trains SARIMAX trip-count forecaster per borough × service_id |
 | `app.utils.settings` | `Settings` | Loads `config.yaml` → `SettingsSchema` (pydantic) |
 | `app.utils.spark` | `SparkClient` | PySpark session, `local[4]`, driver 6g, shuffles 64 |
 | `app.utils.logger` | `Logger` | Singleton, file+console |
@@ -107,7 +108,35 @@ thresholds, isolation-fraud hyperparams, kmodes params); defaults apply if omitt
 
 Python 3.12, managed with **uv**. **Java JDK 11+** required by PySpark. Dependencies: `httpx`, `kmodes`,
 `pandas`, `polars`, `pyarrow`, `pydantic`, `pyspark`, `pyyaml`, `scikit-learn`, `joblib`, `ipykernel`.
-No test framework, linter, formatter, or CI configured.
+
+## Tests
+
+`pytest` (dev dependency). Run with:
+
+```bash
+PYTHONPATH=. uv run pytest                         # all tests
+PYTHONPATH=. uv run pytest -m "not integration"    # fast: unit + spark (skip e2e)
+PYTHONPATH=. uv run pytest -m integration          # slow: full pipeline e2e
+PYTHONPATH=. uv run pytest tests/unit/             # fast pure-Python rules & schema
+PYTHONPATH=. uv run pytest tests/spark/            # silver, gold, ML model tests
+PYTHONPATH=. uv run pytest -k "isolation"          # subset by keyword
+```
+
+**Prerequisites**: `data/bronze/{yellow,green,fhv,fhvhv}/2023-01.parquet` must exist on
+disk (the `conftest.py` session fixture samples 50 rows from each). Run
+`uv run main.py` once to download or use existing data.
+
+| File | Tests | Markers |
+|---|---|---|
+| `tests/unit/test_rules_*.py` | Profiling-rule dictionaries (nullability, reasonableness, amount components) | — |
+| `tests/unit/test_feature_rules.py` | Gold feature-rule Column functions (time blocks, generosity, ratecode tariff, passenger groups) | `spark` |
+| `tests/unit/test_settings_schema.py` | Pydantic schema validation (Module, DatasetsConfig, GoldConfig defaults) | — |
+| `tests/spark/test_silver_cleaner.py` | SilverCleaner reject/fix phases, COMPOSITE_KEYS, fhvhv accuracy skip, _first_match | `spark` |
+| `tests/spark/test_star_schema.py` | StarSchemaBuilder dims/facts, trip_id, ISO weekday, heterogeneous schemas | `spark` |
+| `tests/spark/test_gold_dimensions.py` | GoldDimensionsBuilder (dia_categoria, is_holiday, borough_name_es, ratecode theoretical) | `spark` |
+| `tests/spark/test_gold_marts.py` | GoldBuilder infrastructure (col_or_null, with_zone, partitioning, GoldContext, flat_fare_rows) | `spark` |
+| `tests/spark/test_ml_models.py` | IsolationForest, KModes, SariMax training on synthetic feature stores | `spark` |
+| `tests/integration/test_pipeline_e2e.py` | Full bronze → profiling → silver → star → gold chain + audit FK integrity | `integration`, `spark` |
 
 ## Conventions
 

@@ -80,7 +80,7 @@ def _compute_exog_from_timestamps(
             .isin(HOLIDAY_DATE_KEYS)
             .astype(float)
             .values,
-            "is_weekend": (dow >= 5).astype(float).values,
+            "is_weekend": (dow >= 5).astype(float),
             "is_rush_hour": pd.Series(hour, index=timestamps)
             .isin(RUSH_HOURS)
             .astype(float)
@@ -190,9 +190,9 @@ def _make_train_score_fn(
         # --- Prediccion in-sample + forecast de backtest ---------------
         in_sample = result.get_prediction()
         yhat_ins = in_sample.predicted_mean
-        ci_ins = in_sample.conf_int(alpha=0.05)
-        ci_ins_lower = ci_ins.iloc[:, 0].values
-        ci_ins_upper = ci_ins.iloc[:, 1].values
+        ci_ins = np.asarray(in_sample.conf_int(alpha=0.05))
+        ci_ins_lower = ci_ins[:, 0]
+        ci_ins_upper = ci_ins[:, 1]
 
         mae = None
         mape = None
@@ -200,9 +200,9 @@ def _make_train_score_fn(
         if y_test is not None and len(y_test) > 0:
             forec = result.get_forecast(steps=len(y_test), exog=exog_test.values)
             yhat_fc = forec.predicted_mean
-            ci_fc = forec.conf_int(alpha=0.05)
-            ci_fc_lower = ci_fc.iloc[:, 0].values
-            ci_fc_upper = ci_fc.iloc[:, 1].values
+            ci_fc = np.asarray(forec.conf_int(alpha=0.05))
+            ci_fc_lower = ci_fc[:, 0]
+            ci_fc_upper = ci_fc[:, 1]
 
             yhat_full = np.concatenate([yhat_ins, yhat_fc])
             yhat_lower_full = np.concatenate([ci_ins_lower, ci_fc_lower])

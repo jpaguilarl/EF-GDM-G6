@@ -18,3 +18,11 @@ dependencies = [
     "scikit-learn>=1.5.0",
     "statsmodels>=0.14.0",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+  "integration: end-to-end pipeline runs (slower)",
+  "spark: requires a real SparkSession",
+]
