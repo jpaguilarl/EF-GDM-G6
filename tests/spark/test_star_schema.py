@@ -43,11 +43,11 @@ def star_setup(tmp_path_factory, spark, bronze_subset):
     }
     cleaner = SilverCleaner(spark)
     for cat in ["yellow", "green", "fhv", "fhvhv"]:
-        df = spark.read.parquet(str(tmp / "data" / "bronze" / cat / "2023-01.parquet"))
-        clean_df, reject_df = cleaner.clean(df, cat, 2023, 1, zone_ids)
+        df = spark.read.parquet(str(tmp / "data" / "bronze" / cat / "2025-01.parquet"))
+        clean_df, reject_df = cleaner.clean(df, cat, 2025, 1, zone_ids)
         stage_dir = tmp / "data" / "silver" / "stage" / cat
         stage_dir.mkdir(parents=True, exist_ok=True)
-        clean_df.write.mode("overwrite").parquet(str(stage_dir / "2023-01.parquet"))
+        clean_df.write.mode("overwrite").parquet(str(stage_dir / "2025-01.parquet"))
         cleaner.cleanup()
     return tmp
 
@@ -156,38 +156,39 @@ def test_build_facts_smoke(spark, star_setup, datasets_config):
     builder.build_facts(datasets_config)
 
     for cat in ["yellow", "green", "fhv", "fhvhv"]:
-        p = FACTS_DIR / f"fact_{cat}_trip" / "2023-01.parquet"
+        p = FACTS_DIR / f"fact_{cat}_trip" / "2025-01.parquet"
         assert p.exists(), f"Missing fact: {p}"
 
 
 def test_fact_has_trip_id(spark, star_setup, datasets_config):
     DIMS_DIR = star_setup / "data/silver/star/dims"
     FACTS_DIR = star_setup / "data/silver/star/facts"
-    if not (FACTS_DIR / "fact_yellow_trip" / "2023-01.parquet").exists():
+    if not (FACTS_DIR / "fact_yellow_trip" / "2025-01.parquet").exists():
         if not (DIMS_DIR / "dim_date.parquet").exists():
             StarSchemaBuilder(spark).build_dimensions()
         StarSchemaBuilder(spark).build_facts(datasets_config)
 
     for cat in ["yellow", "green", "fhv", "fhvhv"]:
-        p = FACTS_DIR / f"fact_{cat}_trip" / "2023-01.parquet"
+        p = FACTS_DIR / f"fact_{cat}_trip" / "2025-01.parquet"
         df = spark.read.parquet(str(p))
         assert df.filter(F.col("trip_id").isNull()).count() == 0
         sample = df.select("trip_id").first()
         assert sample is not None
         tid = sample["trip_id"]
-        assert isinstance(tid, str) and len(tid) > 0
+        # trip_id es xxhash64 -> BIGINT (ver star._add_trip_id), no string sha2
+        assert isinstance(tid, int)
 
 
 def test_fact_standardized_timestamps(spark, star_setup, datasets_config):
     DIMS_DIR = star_setup / "data/silver/star/dims"
     FACTS_DIR = star_setup / "data/silver/star/facts"
-    if not (FACTS_DIR / "fact_yellow_trip" / "2023-01.parquet").exists():
+    if not (FACTS_DIR / "fact_yellow_trip" / "2025-01.parquet").exists():
         if not (DIMS_DIR / "dim_date.parquet").exists():
             StarSchemaBuilder(spark).build_dimensions()
         StarSchemaBuilder(spark).build_facts(datasets_config)
 
     for cat in ["yellow", "green", "fhv", "fhvhv"]:
-        p = FACTS_DIR / f"fact_{cat}_trip" / "2023-01.parquet"
+        p = FACTS_DIR / f"fact_{cat}_trip" / "2025-01.parquet"
         df = spark.read.parquet(str(p))
         col_types = dict(df.dtypes)
         assert "pickup_datetime" in col_types, f"{cat} missing pickup_datetime"
@@ -199,14 +200,14 @@ def test_fact_standardized_timestamps(spark, star_setup, datasets_config):
 def test_fact_schema_by_category(spark, star_setup, datasets_config):
     DIMS_DIR = star_setup / "data/silver/star/dims"
     FACTS_DIR = star_setup / "data/silver/star/facts"
-    if not (FACTS_DIR / "fact_yellow_trip" / "2023-01.parquet").exists():
+    if not (FACTS_DIR / "fact_yellow_trip" / "2025-01.parquet").exists():
         if not (DIMS_DIR / "dim_date.parquet").exists():
             StarSchemaBuilder(spark).build_dimensions()
         StarSchemaBuilder(spark).build_facts(datasets_config)
 
     yellow_cols = set(
         spark.read.parquet(
-            str(FACTS_DIR / "fact_yellow_trip" / "2023-01.parquet")
+            str(FACTS_DIR / "fact_yellow_trip" / "2025-01.parquet")
         ).columns
     )
     for c in ["fare_amount", "vendor_id", "trip_id", "pickup_datetime",
@@ -216,7 +217,7 @@ def test_fact_schema_by_category(spark, star_setup, datasets_config):
 
     fhvhv_cols = set(
         spark.read.parquet(
-            str(FACTS_DIR / "fact_fhvhv_trip" / "2023-01.parquet")
+            str(FACTS_DIR / "fact_fhvhv_trip" / "2025-01.parquet")
         ).columns
     )
     for c in ["driver_pay", "hvfhs_license_num", "trip_id", "pickup_datetime",

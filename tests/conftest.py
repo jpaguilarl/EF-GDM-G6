@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import shutil
+import sys
 import uuid
 from pathlib import Path
 
@@ -26,7 +28,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 BRONZE_SOURCE = PROJECT_ROOT / "data" / "bronze"
 
 SAMPLE_ROWS = 50
-SAMPLE_YEAR = "2023"
+# El bronce real en disco es del año 2025 (config.yaml datasets.years=[2025]).
+SAMPLE_YEAR = "2025"
 SAMPLE_MONTH = "01"
 CATEGORIES = ["yellow", "green", "fhv", "fhvhv"]
 
@@ -68,6 +71,12 @@ def _sample_bronze(target_root: Path) -> Path:
 
 @pytest.fixture(scope="session")
 def spark() -> SparkSession:
+    # Sin esto, en Windows Spark lanza los Python workers como "python3"/"python",
+    # cae en el stub de Microsoft Store y el worker nunca conecta (SocketTimeout ->
+    # los tests spark cuelgan y fallan). SparkClient (prod) ya lo fija; el fixture
+    # debe hacer lo mismo para poder correr la suite en Windows.
+    os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
+    os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
     spark_temp = Path("/tmp") / f".spark_temp_{uuid.uuid4().hex}"
     spark_temp.mkdir(parents=True, exist_ok=True)
     s = (

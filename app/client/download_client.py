@@ -52,6 +52,19 @@ class DownloadClient:
 
         file_path = Path(path or f"data/bronze/{category}/{year}-{month:02d}.parquet")
 
+        # Idempotencia: si el archivo ya existe y es un parquet legible (footer
+        # valido), no re-descargar. Un archivo truncado por una descarga
+        # interrumpida falla la lectura del footer y se re-descarga.
+        if file_path.exists():
+            try:
+                pq.ParquetFile(file_path)
+                self.logger.info(f"Ya descargado, se omite: {file_path}")
+                return
+            except Exception:
+                self.logger.warning(
+                    f"Archivo existente ilegible, se re-descarga: {file_path}"
+                )
+
         try:
             client = await self._get_client()
             file_path.parent.mkdir(parents=True, exist_ok=True)

@@ -21,6 +21,7 @@ from pyspark.storagelevel import StorageLevel
 
 from app.utils.globals import globals
 from app.utils.logger import Logger
+from app.utils.spark import target_files
 
 # --- Rutas estandar -------------------------------------------------------
 GOLD_DIR = globals.project_root / "data/gold"
@@ -62,6 +63,14 @@ def with_zone(df: DataFrame, zone_dim: DataFrame, loc_col: str, prefix: str) -> 
 
 # --- Contexto compartido --------------------------------------------------
 class GoldContext:
+    # Columna de ingresos por categoria para la proyeccion unificada (fhv no
+    # tiene tarifa -> revenue NULL). Mismo criterio que AbcXyzZonesMart.
+    UNION_REVENUE_COL = {
+        "yellow": "total_amount",
+        "green": "total_amount",
+        "fhvhv": "base_passenger_fare",
+    }
+
     def __init__(
         self,
         spark,
@@ -79,6 +88,10 @@ class GoldContext:
         self.gold_dims = gold_dims  # {"zone","date","ratecode"}
         self.silver_audit_id = silver_audit_id
         self.mode = mode
+        # Cache unificado de facts para los builders agregados (ver
+        # get_union_facts): se construye una sola vez y se libera al final del
+        # pipeline con release_union_cache().
+        self._cached_union: DataFrame | None = None
 
     def fact_path(self, category: str, year: int, month: int) -> Path:
         return FACTS_DIR / f"fact_{category}_trip" / f"{year}-{month:02d}.parquet"
@@ -122,6 +135,83 @@ class GoldContext:
             out = out.unionByName(d, allowMissingColumns=True)
         return out
 
+    def get_union_facts(self, categories: list[str] | None = None) -> DataFrame | None:
+        """Union LAZY de TODOS los facts con una proyeccion superset fija.
+
+        Los tres builders agregados (supply/demand, ABC/XYZ, ARIMA) derivan su
+        seleccion de esta union comun (NO acepta select_fn por llamada: una
+        proyeccion del primer caller romperia a los siguientes). Se cachea solo
+        el plan (DataFrame), no los datos — ver nota sobre OOM mas abajo.
+
+        Esquema: service_id, _file_year, _file_month, pickup_datetime,
+        dropoff_datetime, pu_location_id, do_location_id,
+        revenue (total_amount en taxis, base_passenger_fare en fhvhv, NULL fhv).
+        La particion (archivo mensual) de origen se identifica con
+        _file_year/_file_month, no con el timestamp del viaje.
+        """
+        if self._cached_union is None:
+            dfs: list[DataFrame] = []
+            for (cat, year, month) in self.target_months(None):
+                fact = self.read_fact(cat, year, month)
+                if fact is None:
+                    continue
+                cols = set(fact.columns)
+                if "pickup_datetime" not in cols or PU_LOC not in cols:
+                    continue
+                rev_col = self.UNION_REVENUE_COL.get(cat)
+                revenue = (
+                    F.col(rev_col)
+                    if rev_col and rev_col in cols
+                    else F.lit(None).cast("double")
+                )
+                dropoff = (
+                    F.col("dropoff_datetime")
+                    if "dropoff_datetime" in cols
+                    else F.lit(None).cast("timestamp")
+                )
+                do_loc = (
+                    F.col(DO_LOC) if DO_LOC in cols else F.lit(None).cast("int")
+                )
+                dfs.append(
+                    fact.select(
+                        F.lit(cat).alias("service_id"),
+                        F.lit(year).alias("_file_year"),
+                        F.lit(month).alias("_file_month"),
+                        F.col("pickup_datetime"),
+                        dropoff.alias("dropoff_datetime"),
+                        F.col(PU_LOC).alias("pu_location_id"),
+                        do_loc.alias("do_location_id"),
+                        revenue.alias("revenue"),
+                    )
+                )
+            if not dfs:
+                return None
+            out = dfs[0]
+            for d in dfs[1:]:
+                out = out.unionByName(d)
+            # Union LAZY, sin persist(): incluso DISK_ONLY revienta los 6g de heap
+            # a escala completa (OOM real 2026-07-02: los buffers del block manager
+            # al materializar ~940M filas se suman a los buffers de descompresion
+            # zstd de 4 escaneos fhvhv concurrentes). El escaneo lazy con proyeccion
+            # estrecha agrega en streaming con memoria acotada — es el mismo patron
+            # con el que los marts trip-grain recorren fhvhv sin problema. El costo
+            # es re-leer los ~48 parquet por builder agregado.
+            self._cached_union = out
+
+        out = self._cached_union
+        if categories is not None:
+            out = out.filter(F.col("service_id").isin(list(categories)))
+        return out
+
+    def release_union_cache(self) -> None:
+        """Libera el cache unificado al final del pipeline gold."""
+        if self._cached_union is not None:
+            try:
+                self._cached_union.unpersist()
+            except Exception:
+                pass
+            self._cached_union = None
+
 
 # --- Builder base ---------------------------------------------------------
 class GoldBuilder(ABC):
@@ -136,11 +226,15 @@ class GoldBuilder(ABC):
     def output_dir(self) -> Path:
         return GOLD_DIR / self.subdir / self.name
 
-    def _write(self, df: DataFrame) -> None:
+    def _write(self, df: DataFrame, num_files: int = 1) -> None:
         """Escritura idempotente. Con ``partitionOverwriteMode=dynamic`` (lo fija
-        ``GoldPipeline``) ``overwrite`` solo reemplaza las particiones presentes."""
+        ``GoldPipeline``) ``overwrite`` solo reemplaza las particiones presentes.
+
+        ``num_files`` coalesce la salida para evitar decenas de archivos diminutos
+        por particion (herencia del shuffle silver de 64 tareas). Los marts agregados
+        son pequenos (default 1); los trip-grain pasan un valor acorde al volumen."""
         self.output_dir.parent.mkdir(parents=True, exist_ok=True)
-        writer = df.write.mode("overwrite")
+        writer = df.coalesce(num_files).write.mode("overwrite")
         if self.partition_keys:
             writer = writer.partitionBy(*self.partition_keys)
         writer.parquet(str(self.output_dir))
@@ -188,7 +282,7 @@ class TripGrainMart(GoldBuilder):
                 n = part.count()
                 if n == 0:
                     continue
-                self._write(part)
+                self._write(part, target_files(n))
                 total += n
                 wrote_any = True
                 self.logger.info(f"  {self.name} | {cat} {year}-{month:02d}: {n} filas")

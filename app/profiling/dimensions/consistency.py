@@ -166,10 +166,11 @@ class Consistency(Dimension):
 
         failures_sample = []
         if not passed:
-            failures_sample = [
-                row.asDict()
-                for row in df.filter(F.col("_failure")).limit(10).collect()
-            ]
+            # Via helper: filas con timestamps pre-1970 (dropoffs "1900-01-01"
+            # reales en fhv) rompen el collect crudo en Windows (OSError 22).
+            failures_sample = self.collect_sample_as_strings(
+                df.filter(F.col("_failure"))
+            )
 
         return DimensionResult(
             dimension=self.name,

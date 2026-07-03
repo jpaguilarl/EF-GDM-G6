@@ -26,9 +26,10 @@ class TestYellow:
             "improvement_surcharge",
             "congestion_surcharge",
             "airport_fee",
+            "cbd_congestion_fee",  # peaje CBD MTA (2025+), parte de total_amount
         ]
         assert self.cfg["components"] == expected
-        assert len(self.cfg["components"]) == 8
+        assert len(self.cfg["components"]) == 9
 
 
 class TestGreen:
@@ -48,9 +49,10 @@ class TestGreen:
             "ehail_fee",
             "improvement_surcharge",
             "congestion_surcharge",
+            "cbd_congestion_fee",  # peaje CBD MTA (2025+), parte de total_amount
         ]
         assert self.cfg["components"] == expected
-        assert len(self.cfg["components"]) == 8
+        assert len(self.cfg["components"]) == 9
 
 
 class TestFhvhv:

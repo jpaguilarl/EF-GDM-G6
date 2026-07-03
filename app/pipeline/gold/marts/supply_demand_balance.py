@@ -11,8 +11,6 @@ from pyspark.sql import functions as F
 from pyspark.storagelevel import StorageLevel
 
 from app.pipeline.gold.mart_builder import (
-    DO_LOC,
-    PU_LOC,
     GoldBuilder,
     GoldContext,
 )
@@ -28,23 +26,16 @@ class SupplyDemandBalanceMart(GoldBuilder):
         threshold = ctx.config.supply_demand.deficit_threshold
         step = block * 60  # segundos por bloque
 
-        def select_fn(fact, category):
-            cols = set(fact.columns)
-            if not ({PU_LOC, DO_LOC} <= cols):
-                return None
-            return fact.select(
-                F.col("pickup_datetime"),
-                F.col("dropoff_datetime"),
-                F.col(PU_LOC).alias("pu_location_id"),
-                F.col(DO_LOC).alias("do_location_id"),
-            )
-
-        df = ctx.read_union(select_fn)
-        if df is None:
+        # Cache unificado compartido con ABC/XYZ y ARIMA (una sola lectura de
+        # todos los facts). Ya esta persistido: los dos escaneos (entrantes +
+        # salientes) lo reusan sin re-leer parquet.
+        union = ctx.get_union_facts()
+        if union is None:
             self.logger.warning(f"  {self.name}: sin facts con columnas de ubicación")
             return -1
-        # df se escanea dos veces (entrantes + salientes): persistir evita re-leer
-        df = df.persist(StorageLevel.MEMORY_AND_DISK)
+        df = union.select(
+            "pickup_datetime", "dropoff_datetime", "pu_location_id", "do_location_id"
+        )
 
         drop_block = (F.floor(F.unix_timestamp("dropoff_datetime") / step) * step).cast(
             "long"
@@ -124,10 +115,13 @@ class SupplyDemandBalanceMart(GoldBuilder):
             )
         )
 
+        # Persistir el AGREGADO (zona x bloque, pequeño): sin esto, count() y la
+        # escritura recomputarian todo el DAG (2 pasadas extra sobre el cache).
+        out = out.persist(StorageLevel.MEMORY_AND_DISK)
         try:
             n = out.count()
             self._write(out)
             self.logger.info(f"  {self.name}: {n} filas (bloques de {block} min)")
             return n
         finally:
-            df.unpersist()
+            out.unpersist()

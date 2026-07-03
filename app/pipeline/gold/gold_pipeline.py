@@ -94,6 +94,7 @@ class GoldPipeline:
         )
         config_md5 = self._config_md5(settings.gold)
 
+        failures: list[str] = []
         for cls in self.BUILDER_CLASSES:
             builder = cls()
             if self.only and builder.name not in self.only:
@@ -104,6 +105,7 @@ class GoldPipeline:
                 rowcount = builder.build(ctx)
             except Exception as e:
                 self.logger.critical(f"Error construyendo {builder.name}: {e}")
+                failures.append(builder.name)
                 continue
             end = datetime.now()
             if rowcount < 0:
@@ -113,6 +115,13 @@ class GoldPipeline:
                 continue
             self._write_audit(builder, rowcount, start, end, silver_audit_id, config_md5)
 
+        ctx.release_union_cache()
+        if failures:
+            # Fallar ruidosamente: sin esto un builder caido (p.ej. por muerte de
+            # la JVM) dejaba un gold incompleto reportado como exitoso.
+            raise RuntimeError(
+                f"Capa gold fallo en {len(failures)} builder(s): {', '.join(failures)}"
+            )
         self.logger.info("Capa gold completada exitosamente")
 
     # ------------------------------------------------------------------

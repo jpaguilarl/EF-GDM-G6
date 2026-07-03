@@ -3,7 +3,7 @@
 from pyspark.sql import functions as F
 
 from app.pipeline.gold.feature_rules import time_blocks as tb
-from app.pipeline.gold.mart_builder import PU_LOC, GoldBuilder, GoldContext
+from app.pipeline.gold.mart_builder import GoldBuilder, GoldContext
 
 
 class ArimaFeatures(GoldBuilder):
@@ -12,20 +12,17 @@ class ArimaFeatures(GoldBuilder):
     partition_keys = ["borough", "year", "month"]
 
     def build(self, ctx: GoldContext) -> int:
-        def select_fn(fact, category):
-            if PU_LOC not in fact.columns:
-                return None
-            return fact.select(
-                F.col("pickup_datetime"),
-                F.col(PU_LOC).alias("location_id"),
-                F.col("service_id"),
-            )
-
-        df = ctx.read_union(select_fn)
-        if df is None:
+        # Cache unificado compartido con supply/demand y ABC/XYZ: evita re-leer
+        # los ~48 facts que este builder proyectaba por su cuenta.
+        union = ctx.get_union_facts()
+        if union is None:
             self.logger.warning(f"  {self.name}: sin facts disponibles")
             return -1
-        df = df.filter(F.col("pickup_datetime").isNotNull())
+        df = union.select(
+            F.col("pickup_datetime"),
+            F.col("pu_location_id").alias("location_id"),
+            F.col("service_id"),
+        ).filter(F.col("pickup_datetime").isNotNull())
 
         zone_dim = ctx.gold_dims["zone"].select(
             F.col("LocationID").alias("_zid"), F.col("Borough").alias("borough")

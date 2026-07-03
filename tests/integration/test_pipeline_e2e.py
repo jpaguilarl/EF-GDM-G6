@@ -31,11 +31,11 @@ def test_pipeline_e2e(
         pytest.skip("No se encontraron datos de bronce")
 
     for cat in populated_cats:
-        src = tmp_path / "data" / "bronze" / cat / "2023-01.parquet"
+        src = tmp_path / "data" / "bronze" / cat / "2025-01.parquet"
         if not src.exists():
             continue
         for m in range(2, 13):
-            dst = tmp_path / "data" / "bronze" / cat / f"2023-{m:02d}.parquet"
+            dst = tmp_path / "data" / "bronze" / cat / f"2025-{m:02d}.parquet"
             shutil.copy2(str(src), str(dst))
 
     monkeypatch.chdir(tmp_path)
@@ -45,7 +45,7 @@ def test_pipeline_e2e(
     except Exception:
         pass
     for cat in populated_cats:
-        jp = tmp_path / "data" / "profiling" / cat / "2023-01.json"
+        jp = tmp_path / "data" / "profiling" / cat / "2025-01.json"
         if jp.exists():
             with open(jp) as f:
                 r = json.load(f)
@@ -57,7 +57,7 @@ def test_pipeline_e2e(
     silver = SilverPipeline()
     silver.run_quality(datasets_config)
     for cat in populated_cats:
-        sp = tmp_path / "data" / "silver" / "stage" / cat / "2023-01.parquet"
+        sp = tmp_path / "data" / "silver" / "stage" / cat / "2025-01.parquet"
         assert sp.exists()
     assert (tmp_path / "data" / "silver" / "audit.parquet").exists()
 
@@ -67,7 +67,7 @@ def test_pipeline_e2e(
         assert (dd / f"{dn}.parquet").exists()
     silver.run_load(datasets_config)
     for cat in populated_cats:
-        fp = tmp_path / "data" / "silver" / "star" / "facts" / f"fact_{cat}_trip" / "2023-01.parquet"
+        fp = tmp_path / "data" / "silver" / "star" / "facts" / f"fact_{cat}_trip" / "2025-01.parquet"
         assert fp.exists()
 
     from app.pipeline.gold.gold_pipeline import GoldPipeline
@@ -88,7 +88,7 @@ def test_pipeline_e2e(
     assert all(s in sids for s in gold_a["silver_audit_id"])
 
     for cat in populated_cats:
-        jp = tmp_path / "data" / "profiling" / cat / "2023-01.json"
+        jp = tmp_path / "data" / "profiling" / cat / "2025-01.json"
         if jp.exists():
             with open(jp) as f:
                 r = json.load(f)

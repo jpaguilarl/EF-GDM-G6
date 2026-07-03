@@ -23,6 +23,7 @@ from pyspark.sql.types import (
     BooleanType,
     DoubleType,
     IntegerType,
+    LongType,
     StringType,
     StructField,
     StructType,
@@ -55,7 +56,7 @@ IDENTIFIER_COLS: list[str] = [
 
 OUTPUT_SCHEMA = StructType(
     [
-        StructField("trip_id", StringType(), True),
+        StructField("trip_id", LongType(), True),
         StructField("ratecode_id", IntegerType(), True),
         StructField("service_id", StringType(), True),
         StructField("year", IntegerType(), True),
@@ -71,81 +72,7 @@ OUTPUT_SCHEMA = StructType(
 SCORES_DIR: Path = ML_DIR / "ml_isolation_fraud_scores"
 MODELS_DIR: Path = GOLD_DIR / "models" / "isolation_forest"
 
-
-def _make_train_score_fn(
-    min_rows: int,
-    contamination: float,
-    n_estimators: int,
-    max_samples: str | int,
-    random_state: int,
-):
-    """Devuelve una funcion picklable para ``applyInPandas``.
-
-    Captura los hiperparametros y las constantes de modulo (Path, listas) como
-    closure. En Spark ``local[4]`` los side effects (joblib.dump) escriben al
-    disco local compartido.
-    """
-    feature_cols = FEATURE_COLS
-    id_cols = IDENTIFIER_COLS
-    models_dir = MODELS_DIR
-
-    def _train_score(pdf: pd.DataFrame) -> pd.DataFrame:
-        rc = int(pdf["ratecode_id"].iloc[0])
-        n_rows = len(pdf)
-
-        # Imputar NaN con mediana, y si toda la columna es NaN -> 0
-        X = pdf[feature_cols].copy()
-        for col in feature_cols:
-            if col in X.columns:
-                X[col] = X[col].fillna(X[col].median()).fillna(0.0)
-
-        result = pdf[id_cols].copy()
-
-        if n_rows < min_rows:
-            result["anomaly_score"] = np.nan
-            result["is_fraud"] = False
-            result["model_status"] = "skipped_low_rows"
-            return result
-
-        model = IsolationForest(
-            n_estimators=n_estimators,
-            contamination=contamination,
-            max_samples=max_samples,
-            random_state=random_state,
-            n_jobs=-1,
-        )
-        model.fit(X.values)
-
-        scores = -model.decision_function(X.values)
-        preds = model.predict(X.values)
-
-        model_dir = models_dir / str(rc)
-        model_dir.mkdir(parents=True, exist_ok=True)
-        joblib.dump(model, model_dir / "model.joblib")
-
-        with (model_dir / "metadata.json").open("w") as f:
-            json.dump(
-                {
-                    "ratecode_id": rc,
-                    "n_rows": n_rows,
-                    "n_features": len(feature_cols),
-                    "features": feature_cols,
-                    "contamination": contamination,
-                    "n_estimators": n_estimators,
-                    "max_samples": max_samples,
-                    "random_state": random_state,
-                    "trained_at": datetime.now().isoformat(),
-                },
-                f,
-                indent=2,
-            )
-
-        result["anomaly_score"] = scores
-        result["is_fraud"] = (preds == -1).astype(bool)
-        result["model_status"] = "ok"
-        return result[list(OUTPUT_SCHEMA.fieldNames())]
-
-    return _train_score
+MAX_SAMPLE_PER_RATECODE = 200_000
 
 
 class IsolationForestModelPipeline:
@@ -165,6 +92,7 @@ class IsolationForestModelPipeline:
     def run(self) -> int:
         spark = self.spark_client.get_session()
         spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
+        spark.conf.set("spark.sql.execution.arrow.pyspark.enabled", "false")
         self.logger.info(
             f"Iniciando Isolation Forest | audit_id={self.audit_id}"
         )
@@ -199,46 +127,96 @@ class IsolationForestModelPipeline:
         random_state = self.if_config.random_state
         min_rows = self.if_config.min_rows_per_ratecode
 
-        train_fn = _make_train_score_fn(
-            min_rows=min_rows,
-            contamination=contamination,
-            n_estimators=n_estimators,
-            max_samples=max_samples,
-            random_state=random_state,
-        )
+        ratecode_ids = [
+            r.ratecode_id
+            for r in data.select("ratecode_id").distinct().orderBy("ratecode_id").collect()
+        ]
+        self.logger.info(f"Ratecodes encontrados: {ratecode_ids}")
 
-        scored = data.groupby("ratecode_id").applyInPandas(
-            train_fn, schema=OUTPUT_SCHEMA
-        )
+        MODELS_DIR.mkdir(parents=True, exist_ok=True)
+        SCORES_DIR.mkdir(parents=True, exist_ok=True)
+        total_scored = 0
 
-        n = scored.count()
-        if n == 0:
+        for rc in ratecode_ids:
+            rc_data = data.filter(F.col("ratecode_id") == rc)
+            n_rows = rc_data.count()
+            self.logger.info(f"=== RatecodeID={rc} | filas={n_rows:,} ===")
+
+            if n_rows < min_rows:
+                self.logger.info(f"  Saltado: solo {n_rows} filas (min_rows={min_rows})")
+                continue
+
+            if n_rows > MAX_SAMPLE_PER_RATECODE:
+                fraction = MAX_SAMPLE_PER_RATECODE / n_rows
+                sampled = rc_data.sample(fraction=fraction, seed=42).limit(MAX_SAMPLE_PER_RATECODE)
+                self.logger.info(f"  Muestreo: {n_rows:,} -> {MAX_SAMPLE_PER_RATECODE:,} (frac={fraction:.4f})")
+            else:
+                sampled = rc_data
+
+            pdf = sampled.toPandas()
+            id_part = pdf[IDENTIFIER_COLS].copy()
+            X = pdf[FEATURE_COLS].copy()
+            for col in FEATURE_COLS:
+                if col in X.columns:
+                    X[col] = X[col].fillna(X[col].median()).fillna(0.0)
+
+            model = IsolationForest(
+                n_estimators=n_estimators,
+                contamination=contamination,
+                max_samples=max_samples,
+                random_state=random_state,
+                n_jobs=-1,
+            )
+            model.fit(X.values)
+            scores = -model.decision_function(X.values)
+
+            model_dir = MODELS_DIR / str(rc)
+            model_dir.mkdir(parents=True, exist_ok=True)
+            joblib.dump(model, model_dir / "model.joblib")
+            with (model_dir / "metadata.json").open("w") as f:
+                json.dump(
+                    {
+                        "ratecode_id": int(rc),
+                        "n_rows_source": n_rows,
+                        "n_rows_trained": len(pdf),
+                        "n_features": len(FEATURE_COLS),
+                        "features": FEATURE_COLS,
+                        "contamination": contamination,
+                        "n_estimators": n_estimators,
+                        "max_samples": max_samples,
+                        "random_state": random_state,
+                        "trained_at": datetime.now().isoformat(),
+                    },
+                    f,
+                    indent=2,
+                )
+
+            out = id_part.copy()
+            out["anomaly_score"] = scores
+            out["is_fraud"] = (scores > np.percentile(scores, 95)).astype(bool)
+            out["model_status"] = "ok"
+
+            out = out[list(OUTPUT_SCHEMA.fieldNames())]
+            n_scored = len(out)
+            total_scored += n_scored
+
+            temp_path = str(SCORES_DIR / f"_tmp_{rc}")
+            spark.createDataFrame(out).coalesce(1).write.mode("overwrite").parquet(temp_path)
+
+            final_path = str(SCORES_DIR / f"ratecode_id={rc}")
+            spark.read.parquet(temp_path).write.mode("overwrite").parquet(final_path)
+
+            self.logger.info(f"  Modelo guardado: RatecodeID={rc} | {n_scored:,} scores escritos")
+
+        if total_scored == 0:
             self.logger.warning("Sin datos para modelar")
             return -1
 
-        SCORES_DIR.parent.mkdir(parents=True, exist_ok=True)
-        self.logger.info(
-            f"Escribiendo {n} viajes puntuados a {SCORES_DIR}"
-        )
-        scored.write.mode("overwrite").partitionBy("ratecode_id").parquet(
-            str(SCORES_DIR)
-        )
+        self.logger.info(f"Total viajes puntuados: {total_scored:,}")
 
-        self.logger.info("Resumen de modelos por RatecodeID:")
-        for row in (
-            scored.groupby("ratecode_id", "model_status")
-            .agg(F.count("*").alias("cnt"))
-            .orderBy("ratecode_id")
-            .collect()
-        ):
-            self.logger.info(
-                f"  RatecodeID {row['ratecode_id']:>2} | "
-                f"{row['model_status']:>18} | {row['cnt']:>8} viajes"
-            )
-
-        self._write_audit(n)
+        self._write_audit(total_scored)
         self.logger.info("Isolation Forest completado exitosamente")
-        return n
+        return total_scored
 
     def _write_audit(self, rowcount: int) -> None:
         audit_path = ML_DIR / "audit.parquet"
@@ -256,5 +234,9 @@ class IsolationForestModelPipeline:
         df_new = pl.DataFrame([row])
         if audit_path.exists():
             existing = pl.read_parquet(str(audit_path))
-            df_new = pl.concat([existing, df_new])
+            common = [c for c in df_new.columns if c in existing.columns]
+            if common:
+                df_new = pl.concat([existing.select(common), df_new.select(common)])
+            else:
+                df_new = pl.concat([existing, df_new], how="diagonal")
         df_new.write_parquet(str(audit_path))

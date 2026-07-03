@@ -9,14 +9,12 @@ from pyspark.sql import Window
 from pyspark.sql import functions as F
 from pyspark.storagelevel import StorageLevel
 
-from app.pipeline.gold.mart_builder import PU_LOC, GoldBuilder, GoldContext
+from app.pipeline.gold.mart_builder import GoldBuilder, GoldContext
 
-# columna de ingresos por categoria (taxis usan total_amount; fhvhv base_passenger_fare)
-REVENUE_COL = {
-    "yellow": "total_amount",
-    "green": "total_amount",
-    "fhvhv": "base_passenger_fare",
-}
+# Columna de ingresos por categoria. La normalizacion real a `revenue` la hace
+# GoldContext.get_union_facts() (UNION_REVENUE_COL); aqui solo define QUE
+# categorias participan del analisis ABC/XYZ (fhv queda fuera: no tiene tarifa).
+REVENUE_COL = GoldContext.UNION_REVENUE_COL
 
 
 class AbcXyzZonesMart(GoldBuilder):
@@ -38,8 +36,10 @@ class AbcXyzZonesMart(GoldBuilder):
             data = self._load_year(ctx, cat, year)
             if data is None:
                 continue
-            # data se escanea varias veces (ingresos, viajes diarios, Pareto)
-            data = data.persist(StorageLevel.MEMORY_AND_DISK)
+            # data se escanea varias veces (ingresos, viajes diarios, Pareto).
+            # DISK_ONLY: el subset fhvhv de un año (~230M filas) en heap
+            # provocaria el mismo OOM que se observo con el cache unificado.
+            data = data.persist(StorageLevel.DISK_ONLY)
             try:
                 out = self._classify(data, cat, year, ctx, a_thr, b_thr, cfg)
                 n = out.count()
@@ -56,27 +56,21 @@ class AbcXyzZonesMart(GoldBuilder):
     def _load_year(
         self, ctx: GoldContext, cat: str, year: int
     ) -> DataFrame | None:
-        rc = REVENUE_COL[cat]
-        dfs: list[DataFrame] = []
-        for (c, y, m) in ctx.target_months([cat]):
-            if y != year:
-                continue
-            fact = ctx.read_fact(c, y, m)
-            if fact is None or rc not in fact.columns or PU_LOC not in fact.columns:
-                continue
-            dfs.append(
-                fact.select(
-                    F.col(PU_LOC).alias("location_id"),
-                    F.col(rc).alias("revenue"),
-                    F.to_date("pickup_datetime").alias("trip_date"),
-                )
-            )
-        if not dfs:
+        # Deriva del cache unificado (compartido con supply/demand y ARIMA) en
+        # vez de re-leer los 12 parquet del año: la columna `revenue` ya viene
+        # normalizada por categoria (REVENUE_COL) al construir el cache.
+        union = ctx.get_union_facts(categories=[cat])
+        if union is None:
             return None
-        data = dfs[0]
-        for d in dfs[1:]:
-            data = data.unionByName(d)
-        return data.filter(F.col("location_id").isNotNull())
+        return (
+            union.filter(F.col("_file_year") == year)
+            .select(
+                F.col("pu_location_id").alias("location_id"),
+                F.col("revenue"),
+                F.to_date("pickup_datetime").alias("trip_date"),
+            )
+            .filter(F.col("location_id").isNotNull())
+        )
 
     def _classify(
         self, data, cat, year, ctx, a_thr, b_thr, cfg

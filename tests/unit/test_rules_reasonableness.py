@@ -21,6 +21,7 @@ class TestYellow:
             "passenger_count", "trip_distance", "fare_amount", "total_amount",
             "tip_amount", "tolls_amount", "improvement_surcharge",
             "congestion_surcharge", "airport_fee", "mta_tax", "extra",
+            "cbd_congestion_fee",  # peaje CBD MTA (2025+)
         }
         assert set(self.rr.keys()) == expected
 
@@ -43,6 +44,7 @@ class TestGreen:
             "passenger_count", "trip_distance", "fare_amount", "total_amount",
             "tip_amount", "tolls_amount", "ehail_fee", "improvement_surcharge",
             "congestion_surcharge", "mta_tax", "extra",
+            "cbd_congestion_fee",  # peaje CBD MTA (2025+)
         }
         assert set(self.rr.keys()) == expected
 
@@ -69,7 +71,7 @@ class TestFhvhv:
         expected = {
             "trip_miles", "trip_time", "base_passenger_fare", "driver_pay",
             "tips", "tolls", "bcf", "sales_tax", "congestion_surcharge",
-            "airport_fee",
+            "airport_fee", "cbd_congestion_fee",  # peaje CBD MTA (2025+)
         }
         assert set(self.rr.keys()) == expected
 

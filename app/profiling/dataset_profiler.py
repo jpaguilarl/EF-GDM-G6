@@ -4,6 +4,7 @@ from pathlib import Path
 import pyarrow.parquet as pq
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
+from pyspark.storagelevel import StorageLevel
 
 from app.profiling.dimensions.accuracy import Accuracy
 from app.profiling.dimensions.base import Dimension
@@ -51,6 +52,11 @@ class DatasetProfiler:
 
         session = self.spark.get_session()
         df = session.read.parquet(str(file_path))
+        # Una sola lectura fisica por archivo: cada una de las 8 dimensiones
+        # dispara sus propias acciones y sin persist el parquet se releia >=8
+        # veces desde disco (dominaba el tiempo de profiling en HDD). Lo que no
+        # cabe en heap derrama a spark.local.dir; se libera en el finally.
+        df = df.persist(StorageLevel.MEMORY_AND_DISK)
 
         time_span = self._extract_time_span(df, category)
 
@@ -88,6 +94,11 @@ class DatasetProfiler:
                         failures_sample=[{"error": str(e)}],
                     )
                 )
+
+        # Las dimensiones son los unicos consumidores del df cacheado; si una
+        # falla, el except del loop ya lo capturo y aqui se libera igual. Un
+        # fallo antes del loop lo limpia _free_memory (clearCache) del pipeline.
+        df.unpersist()
 
         overall_score = round(
             sum(d.score for d in dimension_results) / max(len(dimension_results), 1), 4

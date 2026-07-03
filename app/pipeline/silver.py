@@ -1,3 +1,5 @@
+import concurrent.futures
+import threading
 import uuid
 from datetime import datetime
 
@@ -15,7 +17,7 @@ from app.profiling.rules.reasonableness_ranges import (
 from app.schemas.settings_schema import DatasetsConfig, Module
 from app.utils.globals import globals
 from app.utils.logger import Logger
-from app.utils.spark import SparkClient
+from app.utils.spark import SparkClient, target_files
 
 
 class SilverCleaner:
@@ -34,8 +36,8 @@ class SilverCleaner:
     DO_CANDIDATES = ["DOLocationID", "DOlocationID"]
 
     NULLABLE_AMOUNT_COLS = {
-        "yellow": {"congestion_surcharge", "airport_fee"},
-        "green": {"congestion_surcharge", "ehail_fee"},
+        "yellow": {"congestion_surcharge", "airport_fee", "cbd_congestion_fee"},
+        "green": {"congestion_surcharge", "ehail_fee", "cbd_congestion_fee"},
     }
 
     COMPOSITE_KEYS = {
@@ -88,6 +90,11 @@ class SilverCleaner:
         df = self._reject_integrity(df, zone_ids)
         df = self._reject_uniqueness(df, category)
 
+        # _pickup_dt/_dropoff_dt son helpers internos de _reject_consistency que
+        # duplican los timestamps originales. Dropearlos ANTES del persist evita
+        # cachear 2 columnas timestamp extra por fila (~320MB en un mes de fhvhv).
+        df = df.drop("_pickup_dt", "_dropoff_dt")
+
         df = df.persist(StorageLevel.MEMORY_AND_DISK)
         self._cached.append(df)
 
@@ -99,8 +106,11 @@ class SilverCleaner:
         clean_df = self._fix_reasonableness(clean_df, category)
         clean_df = self._fix_validity(clean_df)
 
-        clean_df = clean_df.drop("_row_idx", "_dup_count", "_dup_rank")
-        reject_df = reject_df.drop("_row_idx", "_dup_count", "_dup_rank")
+        # Columnas de trabajo de la fase de rechazo; no deben llegar al stage.
+        # (_pickup_dt/_dropoff_dt ya se droparon antes del persist.)
+        helper_cols = ["_row_idx", "_dup_count", "_dup_rank"]
+        clean_df = clean_df.drop(*helper_cols)
+        reject_df = reject_df.drop(*helper_cols)
 
         return clean_df, reject_df
 
@@ -318,10 +328,20 @@ class SilverCleaner:
 
 
 class SilverPipeline:
+    # 2 archivos en paralelo. NO subir a 3: con local[6] y 3 meses de fhvhv
+    # (~20M filas c/u) escribiendose a la vez, los buffers de FileFormatWriter
+    # reventaron los 6g de heap (OOM real 2026-07-02 19:20, cascada de 53
+    # archivos). Con 2 workers los task slots igual se llenan en las fases
+    # paralelas; el worker extra solo aportaba solape en fases livianas.
+    MAX_PARALLEL_FILES = 2
+
     def __init__(self) -> None:
         self.audit_id = str(uuid.uuid4())
         self.logger = Logger()
         self.spark_client = SparkClient()
+        # _write_audit hace read->concat->write sobre el mismo parquet; sin lock,
+        # dos workers concurrentes se pisarian y perderian filas de auditoria.
+        self._audit_lock = threading.Lock()
 
     def run_quality(self, year_span: DatasetsConfig) -> None:
         spark = self.spark_client.get_session()
@@ -331,28 +351,56 @@ class SilverPipeline:
         )
 
         zone_ids = self._load_zone_ids(spark)
-        cleaner = SilverCleaner(spark)
+        tasks = self._expand_tasks(year_span)
+        failures: list[str] = []
 
+        # Un SilverCleaner por archivo: su cache de DataFrames persistidos es por
+        # instancia, y cleanup() de un worker no debe despersistir los del otro.
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=self.MAX_PARALLEL_FILES
+        ) as executor:
+            futures = {
+                executor.submit(
+                    self._process_file,
+                    spark,
+                    SilverCleaner(spark),
+                    cat,
+                    year,
+                    month,
+                    zone_ids,
+                    bronze_audit_id,
+                ): (cat, year, month)
+                for (cat, year, month) in tasks
+            }
+            for future in concurrent.futures.as_completed(futures):
+                cat, year, month = futures[future]
+                try:
+                    future.result()
+                except Exception as e:
+                    self.logger.error(f"Error procesando {cat} {year}-{month:02d}: {e}")
+                    failures.append(f"{cat} {year}-{month:02d}")
+
+        if failures:
+            # Fallar ruidosamente: un mes ausente en stage seria perdida de datos
+            # silenciosa para star/gold.
+            raise RuntimeError(
+                f"Silver calidad fallo en {len(failures)} archivo(s): {', '.join(sorted(failures))}"
+            )
+
+        self.logger.info("Silver calidad completado exitosamente")
+
+    @staticmethod
+    def _expand_tasks(year_span: DatasetsConfig) -> list[tuple[str, int, int]]:
+        tasks: list[tuple[str, int, int]] = []
         for year in year_span.years:
             if isinstance(year, int):
                 for cat in globals.tlc_categories:
                     for m in range(1, 13):
-                        self._process_file(
-                            spark, cleaner, cat, year, m, zone_ids, bronze_audit_id
-                        )
+                        tasks.append((cat, year, m))
             elif isinstance(year, Module):
                 for m in range(1, 13):
-                    self._process_file(
-                        spark,
-                        cleaner,
-                        year.category,
-                        year.year,
-                        m,
-                        zone_ids,
-                        bronze_audit_id,
-                    )
-
-        self.logger.info("Silver calidad completado exitosamente")
+                    tasks.append((year.category, year.year, m))
+        return tasks
 
     def run_schema(self) -> None:
         from app.pipeline.star import StarSchemaBuilder
@@ -390,11 +438,38 @@ class SilverPipeline:
     ) -> None:
         source = f"data/bronze/{category}/{year}-{month:02d}.parquet"
         full_path = str(globals.project_root / source)
+
+        # Idempotencia: el mes se omite SOLO si stage Y reject tienen su marca
+        # _SUCCESS (la escribe Spark al commitear el job). La sola existencia
+        # del directorio NO basta: un job matado a mitad deja el directorio con
+        # basura _temporary y cero parts commiteados (ocurrio 2026-07-02: OOM
+        # dejo stage fhvhv 2023-09 vacio y reject 2023-07 sin commitear, y el
+        # chequeo por existencia los dio por buenos). Para forzar re-limpieza,
+        # borrar el directorio del mes en silver/stage.
+        stage_out = (
+            globals.project_root
+            / "data/silver/stage"
+            / category
+            / f"{year}-{month:02d}.parquet"
+        )
+        reject_out = (
+            globals.project_root
+            / "data/silver/reject"
+            / category
+            / f"{year}-{month:02d}.parquet"
+        )
+        if (stage_out / "_SUCCESS").exists() and (reject_out / "_SUCCESS").exists():
+            self.logger.info(
+                f"  {category} {year}-{month:02d}: stage ya existe, se omite"
+            )
+            return
+
         self.logger.info(f"Procesando {source}")
 
+        tag = f"{category} {year}-{month:02d}"
         df = spark.read.parquet(full_path).persist(StorageLevel.MEMORY_AND_DISK)
         bronze_rowcount = df.count()
-        self.logger.info(f"  Bronce: {bronze_rowcount} filas")
+        self.logger.info(f"  {tag} | Bronce: {bronze_rowcount} filas")
 
         start_ts = datetime.now()
         clean_df, reject_df = cleaner.clean(df, category, year, month, zone_ids)
@@ -405,16 +480,16 @@ class SilverPipeline:
 
         silver_dir = globals.project_root / "data/silver/stage" / category
         silver_dir.mkdir(parents=True, exist_ok=True)
-        clean_df.write.mode("overwrite").parquet(
+        clean_df.coalesce(target_files(clean_count)).write.mode("overwrite").parquet(
             str(silver_dir / f"{year}-{month:02d}.parquet")
         )
 
         if reject_count > 0:
             reject_dir = globals.project_root / "data/silver/reject" / category
             reject_dir.mkdir(parents=True, exist_ok=True)
-            reject_df.write.mode("overwrite").parquet(
-                str(reject_dir / f"{year}-{month:02d}.parquet")
-            )
+            reject_df.coalesce(target_files(reject_count)).write.mode(
+                "overwrite"
+            ).parquet(str(reject_dir / f"{year}-{month:02d}.parquet"))
 
         cleaner.cleanup()
 
@@ -428,7 +503,7 @@ class SilverPipeline:
             clean_count,
             reject_count,
         )
-        self.logger.info(f"  Silver: {clean_count} | Rechazadas: {reject_count}")
+        self.logger.info(f"  {tag} | Silver: {clean_count} | Rechazadas: {reject_count}")
 
     def _get_latest_bronze_audit_id(self, spark) -> str:
         audit_path = globals.project_root / "data/bronze/audit.parquet"
@@ -484,9 +559,11 @@ class SilverPipeline:
             "rowcount_quality": quality_rc,
             "rowcount_quarantined": reject_rc,
         }
-        df_new = pl.DataFrame([row])
-
-        if audit_path.exists():
-            existing = pl.read_parquet(str(audit_path))
-            df_new = pl.concat([existing, df_new])
-        df_new.write_parquet(str(audit_path))
+        # Seccion critica: read-modify-write del parquet de auditoria. Con
+        # procesamiento paralelo de archivos, sin lock se perderian filas.
+        with self._audit_lock:
+            df_new = pl.DataFrame([row])
+            if audit_path.exists():
+                existing = pl.read_parquet(str(audit_path))
+                df_new = pl.concat([existing, df_new])
+            df_new.write_parquet(str(audit_path))

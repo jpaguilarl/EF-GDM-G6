@@ -1,4 +1,6 @@
+import concurrent.futures
 import gc
+import json
 from pathlib import Path
 
 from pyspark.sql import DataFrame
@@ -23,28 +25,49 @@ class ProfilingPipeline:
         self.zone_ids: set[int] = set()
         self.dicts: dict[str, DataFrame] = {}
 
+    # 3 perfiles en paralelo: el tiempo por archivo esta dominado por el
+    # overhead de scheduling de Spark (8 dimensiones x varias acciones = ~100
+    # jobs pequenos por archivo; medido: ~2 min incluso en green con ~65k
+    # filas), no por el volumen de datos. Solapar perfiles llena esos huecos
+    # con los task slots de local[6]. Misma estrategia que silver/star.
+    MAX_PARALLEL_PROFILES = 3
+
     async def run(self, year_span: DatasetsConfig) -> None:
         self.logger.info("Iniciando pipeline de profiling (8 dimensiones)")
 
         self._load_zone_lookup()
         self._load_data_dictionaries()
 
-        all_reports: list[ProfilingReport] = []
-
+        tasks: list[tuple[str, int, int]] = []
         for year in year_span.years:
             if isinstance(year, int):
                 for cat in globals.tlc_categories:
                     for m in range(1, 13):
-                        report = self._profile_one(cat, year, m)
-                        if report:
-                            all_reports.append(report)
-                        self._free_memory()
+                        tasks.append((cat, year, m))
             elif isinstance(year, Module):
                 for m in range(1, 13):
-                    report = self._profile_one(year.category, year.year, m)
-                    if report:
-                        all_reports.append(report)
-                    self._free_memory()
+                    tasks.append((year.category, year.year, m))
+
+        # NO llamar catalog.clearCache() entre perfiles: es global y
+        # despersistiria los df cacheados de los perfiles concurrentes. Cada
+        # perfil ya libera su propio cache (unpersist en DatasetProfiler).
+        all_reports: list[ProfilingReport] = []
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=self.MAX_PARALLEL_PROFILES
+        ) as executor:
+            futures = [
+                executor.submit(self._profile_one, cat, y, m)
+                for (cat, y, m) in tasks
+            ]
+            for future in concurrent.futures.as_completed(futures):
+                report = future.result()
+                if report:
+                    all_reports.append(report)
+        gc.collect()
+
+        # as_completed devuelve en orden de finalizacion; ordenar para que el
+        # index.html quede estable por categoria/mes.
+        all_reports.sort(key=lambda r: (r.meta.category, r.meta.year, r.meta.month))
 
         if all_reports:
             self.reporter.build_index_html(all_reports)
@@ -64,6 +87,23 @@ class ProfilingPipeline:
         if not file_path.exists():
             self.logger.warning(f"Dataset no encontrado, se omite: {file_path}")
             return None
+
+        # Idempotencia: si el reporte JSON de este dataset ya existe, se reusa
+        # (profiling es solo-lectura y deterministico sobre el mismo bronce).
+        # Se devuelve el reporte cargado para que el index.html lo incluya.
+        # Para re-perfilar un dataset, borrar su JSON en data/profiling/.
+        report_json = self.reporter.output_dir / category / f"{year}-{month:02d}.json"
+        if report_json.exists():
+            try:
+                report = ProfilingReport(
+                    **json.loads(report_json.read_text(encoding="utf-8"))
+                )
+                self.logger.info(f"Perfil ya existe, se reutiliza: {report_json}")
+                return report
+            except Exception:
+                self.logger.warning(
+                    f"Perfil existente ilegible, se re-perfila: {report_json}"
+                )
 
         empty_schema = StructType([
             StructField("nombre_campo", StringType()),
@@ -89,17 +129,6 @@ class ProfilingPipeline:
         except Exception as e:
             self.logger.critical(f"Error critico perfilando {file_path}: {e}")
             return None
-
-    def _free_memory(self) -> None:
-        """Libera DataFrames cacheados en la JVM y fuerza GC de Python entre archivos.
-
-        Evita la acumulacion de memoria del catalogo de Spark a lo largo del loop.
-        """
-        try:
-            self.spark.get_session().catalog.clearCache()
-        except Exception:
-            pass
-        gc.collect()
 
     def _load_zone_lookup(self) -> None:
         zone_path = Path("data/bronze/zone-lookup/zone-lookup-table.parquet")

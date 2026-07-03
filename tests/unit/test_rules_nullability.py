@@ -16,15 +16,17 @@ def test_yellow_nullable():
     nc = NULLABLE_COLUMNS["yellow"]
     assert "airport_fee" in nc
     assert "congestion_surcharge" in nc
-    assert len(nc) == 2
+    assert "cbd_congestion_fee" in nc  # peaje CBD MTA (2025+)
+    assert len(nc) == 3
 
 
 def test_green_nullable():
     nc = NULLABLE_COLUMNS["green"]
     assert "ehail_fee" in nc
     assert "congestion_surcharge" in nc
+    assert "cbd_congestion_fee" in nc  # peaje CBD MTA (2025+)
     assert "airport_fee" not in nc
-    assert len(nc) == 2
+    assert len(nc) == 3
 
 
 def test_fhv_nullable():

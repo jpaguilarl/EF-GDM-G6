@@ -136,10 +136,10 @@ def test_clean_basic_invocation(spark, bronze_subset):
 
     for cat in ["yellow", "green", "fhv", "fhvhv"]:
         df = spark.read.parquet(
-            str(bronze_subset / f"{cat}/2023-01.parquet")
+            str(bronze_subset / f"{cat}/2025-01.parquet")
         )
         total = df.count()
-        clean_df, reject_df = cleaner.clean(df, cat, 2023, 1, zone_ids)
+        clean_df, reject_df = cleaner.clean(df, cat, 2025, 1, zone_ids)
         clean_count = clean_df.count()
         reject_count = reject_df.count() if reject_df is not None else 0
         assert clean_count + reject_count == total, (

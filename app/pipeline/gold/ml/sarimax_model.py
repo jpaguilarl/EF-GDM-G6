@@ -11,6 +11,7 @@ Output:
 
 import json
 import uuid
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -44,34 +45,27 @@ EXOG_COLS: list[str] = [
 RUSH_HOURS: set[int] = {7, 8, 9, 16, 17, 18, 19}
 AIRPORT_BOROUGHS: set[str] = {"EWR", "Queens"}
 
-OUTPUT_SCHEMA = StructType(
-    [
-        StructField("borough", StringType(), True),
-        StructField("service_id", StringType(), True),
-        StructField("pickup_hour", TimestampType(), True),
-        StructField("trip_count", DoubleType(), True),
-        StructField("yhat", DoubleType(), True),
-        StructField("yhat_lower", DoubleType(), True),
-        StructField("yhat_upper", DoubleType(), True),
-        StructField("model_status", StringType(), True),
-    ]
-)
-
 # --- Rutas de salida -------------------------------------------------------
 FORECAST_DIR: Path = ML_DIR / "ml_sarimax_trips_forecast"
 MODELS_DIR: Path = GOLD_DIR / "models" / "sarimax"
 
 
+def _fs_safe(value: str) -> str:
+    """Sanitiza un valor de segmento para rutas de archivo/directorio.
+
+    El zone-lookup trae boroughs como "N/A": la barra convierte el nombre en
+    un subdirectorio inexistente y la escritura revienta con FileNotFoundError
+    (fallo real 2026-07-03 en el segmento N/A|fhv). El parquet conserva el
+    valor original en su columna borough; solo la ruta usa el sanitizado.
+    """
+    return re.sub(r'[<>:"/\\|?*]', "_", value)
+
+
 def _compute_exog_from_timestamps(
     timestamps: pd.DatetimeIndex, borough: str
 ) -> pd.DataFrame:
-    """Recompone las columnas exogenas a partir de timestamps y borough.
-
-    Todas las columnas de EXOG_COLS son deterministas dados el timestamp
-    y el borough, por lo que estan disponibles para cualquier horizonte futuro.
-    """
     hour = timestamps.hour
-    dow = timestamps.dayofweek  # pandas: Monday=0 .. Sunday=6
+    dow = timestamps.dayofweek
     date_keys = timestamps.year * 10000 + timestamps.month * 100 + timestamps.day
 
     return pd.DataFrame(
@@ -91,180 +85,164 @@ def _compute_exog_from_timestamps(
     )
 
 
-def _make_train_score_fn(
+def _train_and_score_segment(
+    pdf: pd.DataFrame,
     min_rows: int,
     order: tuple,
     seasonal_order: tuple,
     forecast_horizon: int,
-):
-    """Devuelve una funcion picklable para ``applyInPandas``.
+) -> pd.DataFrame:
+    borough = str(pdf["borough"].iloc[0])
+    service_id = str(pdf["service_id"].iloc[0])
 
-    Captura los hiperparametros como closure. En Spark ``local[4]`` los
-    side effects (joblib.dump) escriben al disco local compartido.
-    """
+    pdf = pdf.sort_values("pickup_hour").reset_index(drop=True)
+    pdf["pickup_hour"] = pd.to_datetime(pdf["pickup_hour"])
+    if hasattr(pdf["pickup_hour"].dt, "tz") and pdf["pickup_hour"].dt.tz is not None:
+        pdf["pickup_hour"] = pdf["pickup_hour"].dt.tz_localize(None)
 
-    def _train_score(pdf: pd.DataFrame) -> pd.DataFrame:
-        borough = str(pdf["borough"].iloc[0])
-        service_id = str(pdf["service_id"].iloc[0])
+    full_hours = pd.date_range(
+        pdf["pickup_hour"].min(),
+        pdf["pickup_hour"].max(),
+        freq="h",
+    )
+    full = pd.DataFrame({"pickup_hour": full_hours})
+    merged = full.merge(pdf, on="pickup_hour", how="left")
+    merged["trip_count"] = merged["trip_count"].fillna(0.0).astype(float)
 
-        # --- Ordenar y reindexar a grilla horaria completa (sin gaps) ---
-        pdf = pdf.sort_values("pickup_hour").reset_index(drop=True)
-        pdf["pickup_hour"] = pd.to_datetime(pdf["pickup_hour"])
+    exog = _compute_exog_from_timestamps(
+        pd.DatetimeIndex(merged["pickup_hour"]), borough
+    )
 
-        full_hours = pd.date_range(
-            pdf["pickup_hour"].min(),
-            pdf["pickup_hour"].max(),
-            freq="h",
+    n = len(merged)
+
+    if n < min_rows:
+        out = merged[["pickup_hour", "trip_count"]].copy()
+        out["yhat"] = np.nan
+        out["yhat_lower"] = np.nan
+        out["yhat_upper"] = np.nan
+        out["model_status"] = "skipped_low_rows"
+        out["borough"] = borough
+        out["service_id"] = service_id
+        return out
+
+    y = merged["trip_count"].values
+    if forecast_horizon > 0 and n > forecast_horizon:
+        train_end = n - forecast_horizon
+        y_train = y[:train_end]
+        exog_train = exog.iloc[:train_end]
+        y_test = y[train_end:]
+        exog_test = exog.iloc[train_end:]
+    else:
+        y_train = y
+        exog_train = exog
+        y_test = None
+        exog_test = None
+
+    model_status = "ok"
+    result = None
+    actual_order = order
+    actual_seasonal = seasonal_order
+
+    def _fit(order_args, seasonal_args, label):
+        m = SARIMAX(
+            y_train,
+            exog=exog_train.values,
+            order=order_args,
+            seasonal_order=seasonal_args,
+            enforce_stationarity=False,
+            enforce_invertibility=False,
         )
-        full = pd.DataFrame({"pickup_hour": full_hours})
-        merged = full.merge(pdf, on="pickup_hour", how="left")
-        merged["trip_count"] = merged["trip_count"].fillna(0.0).astype(float)
+        return m.fit(disp=False), label, order_args, seasonal_args
 
-        exog = _compute_exog_from_timestamps(
-            pd.DatetimeIndex(merged["pickup_hour"]), borough
+    try:
+        result, model_status, actual_order, actual_seasonal = _fit(
+            order, seasonal_order, "ok"
         )
-
-        n = len(merged)
-
-        # --- Saltar segmentos con pocos datos --------------------------
-        if n < min_rows:
-            merged["yhat"] = np.nan
-            merged["yhat_lower"] = np.nan
-            merged["yhat_upper"] = np.nan
-            merged["model_status"] = "skipped_low_rows"
-            merged["borough"] = borough
-            merged["service_id"] = service_id
-            return merged[list(OUTPUT_SCHEMA.fieldNames())]
-
-        # --- Split train / backtest ------------------------------------
-        y = merged["trip_count"].values
-        if forecast_horizon > 0 and n > forecast_horizon:
-            train_end = n - forecast_horizon
-            y_train = y[:train_end]
-            exog_train = exog.iloc[:train_end]
-            y_test = y[train_end:]
-            exog_test = exog.iloc[train_end:]
-        else:
-            y_train = y
-            exog_train = exog
-            y_test = None
-            exog_test = None
-
-        # --- Ajustar SARIMAX -------------------------------------------
-        model_status = "ok"
-        result = None
-        actual_order = order
-        actual_seasonal = seasonal_order
-
-        def _fit(order_args, seasonal_args, label):
-            m = SARIMAX(
-                y_train,
-                exog=exog_train.values,
-                order=order_args,
-                seasonal_order=seasonal_args,
-                enforce_stationarity=False,
-                enforce_invertibility=False,
-            )
-            return m.fit(disp=False), label, order_args, seasonal_args
-
+    except Exception:
         try:
             result, model_status, actual_order, actual_seasonal = _fit(
-                order, seasonal_order, "ok"
+                (1, 0, 1), (0, 1, 1, 24), "fallback_order"
             )
         except Exception:
-            try:
-                result, model_status, actual_order, actual_seasonal = _fit(
-                    (1, 0, 1), (0, 1, 1, 24), "fallback_order"
+            out = merged[["pickup_hour", "trip_count"]].copy()
+            out["yhat"] = np.nan
+            out["yhat_lower"] = np.nan
+            out["yhat_upper"] = np.nan
+            out["model_status"] = "fit_failed"
+            out["borough"] = borough
+            out["service_id"] = service_id
+            return out
+
+    aic = float(result.aic)
+
+    in_sample = result.get_prediction()
+    yhat_ins = in_sample.predicted_mean
+    ci_ins = np.asarray(in_sample.conf_int(alpha=0.05))
+    ci_ins_lower = ci_ins[:, 0]
+    ci_ins_upper = ci_ins[:, 1]
+
+    mae = None
+    mape = None
+
+    if y_test is not None and len(y_test) > 0:
+        forec = result.get_forecast(steps=len(y_test), exog=exog_test.values)
+        yhat_fc = forec.predicted_mean
+        ci_fc = np.asarray(forec.conf_int(alpha=0.05))
+        ci_fc_lower = ci_fc[:, 0]
+        ci_fc_upper = ci_fc[:, 1]
+
+        yhat_full = np.concatenate([yhat_ins, yhat_fc])
+        yhat_lower_full = np.concatenate([ci_ins_lower, ci_fc_lower])
+        yhat_upper_full = np.concatenate([ci_ins_upper, ci_fc_upper])
+
+        mae = float(np.mean(np.abs(y_test - yhat_fc)))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            mape = float(
+                np.mean(
+                    np.abs((y_test - yhat_fc) / np.maximum(np.abs(y_test), 1.0))
                 )
-            except Exception:
-                merged["yhat"] = np.nan
-                merged["yhat_lower"] = np.nan
-                merged["yhat_upper"] = np.nan
-                merged["model_status"] = "fit_failed"
-                merged["borough"] = borough
-                merged["service_id"] = service_id
-                return merged[list(OUTPUT_SCHEMA.fieldNames())]
-
-        aic = float(result.aic)
-
-        # --- Prediccion in-sample + forecast de backtest ---------------
-        in_sample = result.get_prediction()
-        yhat_ins = in_sample.predicted_mean
-        ci_ins = np.asarray(in_sample.conf_int(alpha=0.05))
-        ci_ins_lower = ci_ins[:, 0]
-        ci_ins_upper = ci_ins[:, 1]
-
-        mae = None
-        mape = None
-
-        if y_test is not None and len(y_test) > 0:
-            forec = result.get_forecast(steps=len(y_test), exog=exog_test.values)
-            yhat_fc = forec.predicted_mean
-            ci_fc = np.asarray(forec.conf_int(alpha=0.05))
-            ci_fc_lower = ci_fc[:, 0]
-            ci_fc_upper = ci_fc[:, 1]
-
-            yhat_full = np.concatenate([yhat_ins, yhat_fc])
-            yhat_lower_full = np.concatenate([ci_ins_lower, ci_fc_lower])
-            yhat_upper_full = np.concatenate([ci_ins_upper, ci_fc_upper])
-
-            mae = float(np.mean(np.abs(y_test - yhat_fc)))
-            with np.errstate(divide="ignore", invalid="ignore"):
-                mape = float(
-                    np.mean(
-                        np.abs((y_test - yhat_fc) / np.maximum(np.abs(y_test), 1.0))
-                    )
-                    * 100
-                )
-        else:
-            yhat_full = yhat_ins
-            yhat_lower_full = ci_ins_lower
-            yhat_upper_full = ci_ins_upper
-
-        merged["yhat"] = yhat_full
-        merged["yhat_lower"] = yhat_lower_full
-        merged["yhat_upper"] = yhat_upper_full
-        merged["model_status"] = model_status
-        merged["borough"] = borough
-        merged["service_id"] = service_id
-
-        # --- Serializar modelo y metadata ------------------------------
-        model_dir = MODELS_DIR / f"{borough}__{service_id}"
-        model_dir.mkdir(parents=True, exist_ok=True)
-        joblib.dump(result, model_dir / "model.joblib")
-
-        with (model_dir / "metadata.json").open("w") as f:
-            json.dump(
-                {
-                    "borough": borough,
-                    "service_id": service_id,
-                    "order": list(actual_order),
-                    "seasonal_order": list(actual_seasonal),
-                    "model_status": model_status,
-                    "n_rows": n,
-                    "exog_cols": EXOG_COLS,
-                    "aic": aic,
-                    "mae": mae,
-                    "mape": mape,
-                    "trained_at": datetime.now().isoformat(),
-                },
-                f,
-                indent=2,
+                * 100
             )
+    else:
+        yhat_full = yhat_ins
+        yhat_lower_full = ci_ins_lower
+        yhat_upper_full = ci_ins_upper
 
-        return merged[list(OUTPUT_SCHEMA.fieldNames())]
+    merged["yhat"] = yhat_full
+    merged["yhat_lower"] = yhat_lower_full
+    merged["yhat_upper"] = yhat_upper_full
+    merged["model_status"] = model_status
+    merged["borough"] = borough
+    merged["service_id"] = service_id
 
-    return _train_score
+    model_dir = MODELS_DIR / f"{_fs_safe(borough)}__{_fs_safe(service_id)}"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    result.remove_data()
+    result.save(str(model_dir / "model.pkl"), remove_data=True)
+
+    with (model_dir / "metadata.json").open("w") as f:
+        json.dump(
+            {
+                "borough": borough,
+                "service_id": service_id,
+                "order": list(actual_order),
+                "seasonal_order": list(actual_seasonal),
+                "model_status": model_status,
+                "n_rows": n,
+                "exog_cols": EXOG_COLS,
+                "aic": aic,
+                "mae": mae,
+                "mape": mape,
+                "trained_at": datetime.now().isoformat(),
+            },
+            f,
+            indent=2,
+        )
+
+    return merged[["pickup_hour", "trip_count", "yhat", "yhat_lower", "yhat_upper", "model_status", "borough", "service_id"]]
 
 
 class SariMaxModelPipeline:
-    """Entrena y evalua SARIMAX(1,1,1)(1,1,1,24) por borough y service_id.
-
-    Uso:
-        pipeline = SariMaxModelPipeline(config)
-        total = pipeline.run()
-    """
-
     def __init__(self, config) -> None:
         self.audit_id = str(uuid.uuid4())
         self.logger = Logger()
@@ -274,6 +252,7 @@ class SariMaxModelPipeline:
     def run(self) -> int:
         spark = self.spark_client.get_session()
         spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
+        spark.conf.set("spark.sql.execution.arrow.pyspark.enabled", "false")
         self.logger.info(
             f"Iniciando SARIMAX trip-count forecaster | audit_id={self.audit_id}"
         )
@@ -307,43 +286,89 @@ class SariMaxModelPipeline:
         min_rows = self.sarimax_config.min_rows_per_segment
         forecast_horizon = self.sarimax_config.forecast_horizon_hours
 
-        train_fn = _make_train_score_fn(
-            min_rows=min_rows,
-            order=order,
-            seasonal_order=seasonal_order,
-            forecast_horizon=forecast_horizon,
-        )
-
-        scored = data.groupby("borough", "service_id").applyInPandas(
-            train_fn, schema=OUTPUT_SCHEMA
-        )
-
-        n = scored.count()
-        if n == 0:
-            self.logger.warning("Sin datos para modelar")
-            return -1
-
-        FORECAST_DIR.parent.mkdir(parents=True, exist_ok=True)
-        self.logger.info(f"Escribiendo {n} registros de prediccion a {FORECAST_DIR}")
-        scored.write.mode("overwrite").partitionBy("borough", "service_id").parquet(
-            str(FORECAST_DIR)
-        )
-
-        self.logger.info("Resumen de modelos SARIMAX por segmento:")
-        for row in (
-            scored.groupby("borough", "service_id", "model_status")
-            .agg(F.count("*").alias("cnt"))
+        segments = (
+            data.select("borough", "service_id")
+            .distinct()
             .orderBy("borough", "service_id")
             .collect()
-        ):
-            self.logger.info(
-                f"  {row['borough']:>15} | {row['service_id']:>8} | "
-                f"{row['model_status']:>18} | {row['cnt']:>8} horas"
+        )
+
+        self.logger.info(f"Segmentos a procesar: {len(segments)}")
+
+        OUTPUT_SCHEMA = StructType(
+            [
+                StructField("borough", StringType(), True),
+                StructField("service_id", StringType(), True),
+                StructField("pickup_hour", TimestampType(), True),
+                StructField("trip_count", DoubleType(), True),
+                StructField("yhat", DoubleType(), True),
+                StructField("yhat_lower", DoubleType(), True),
+                StructField("yhat_upper", DoubleType(), True),
+                StructField("model_status", StringType(), True),
+            ]
+        )
+
+        FORECAST_DIR.parent.mkdir(parents=True, exist_ok=True)
+        total_rows = 0
+
+        for seg in segments:
+            borough_val = seg["borough"]
+            service_val = seg["service_id"]
+            self.logger.info(f"  Segmento: {borough_val:>15} | {service_val:>8}")
+
+            # Idempotencia por segmento: un SARIMAX tarda ~5-8 min; si el
+            # forecast del segmento ya existe se reusa (borrar el archivo
+            # para re-entrenar). Permite reanudar tras un corte sin repetir
+            # los segmentos ya entrenados.
+            safe_b, safe_s = _fs_safe(str(borough_val)), _fs_safe(str(service_val))
+            seg_dir = FORECAST_DIR / f"borough={safe_b}" / f"service_id={safe_s}"
+            part_path = seg_dir / f"forecast_{safe_b}_{safe_s}.zstd.parquet"
+            if part_path.exists():
+                prev_rows = pl.read_parquet(str(part_path)).height
+                total_rows += prev_rows
+                self.logger.info(
+                    f"    ya existe ({prev_rows} horas), se omite"
+                )
+                continue
+
+            pdf = (
+                data.filter(
+                    (F.col("borough") == borough_val)
+                    & (F.col("service_id") == service_val)
+                )
+                .toPandas()
             )
 
-        self._write_audit(n)
+            result_pdf = _train_and_score_segment(
+                pdf,
+                min_rows=min_rows,
+                order=order,
+                seasonal_order=seasonal_order,
+                forecast_horizon=forecast_horizon,
+            )
+
+            if result_pdf is not None and len(result_pdf) > 0:
+                result_pl = pl.from_pandas(result_pdf)
+                result_pl = result_pl.with_columns(
+                    pl.col("pickup_hour").cast(pl.Datetime),
+                )
+                # seg_dir/part_path ya calculados arriba con _fs_safe (el
+                # borough "N/A" contiene una barra que rompia la ruta).
+                seg_dir.mkdir(parents=True, exist_ok=True)
+                result_pl.write_parquet(str(part_path), compression="zstd", compression_level=9)
+                total_rows += len(result_pdf)
+                status = result_pdf["model_status"].iloc[0]
+                self.logger.info(
+                    f"    {status:>18} | {len(result_pdf):>8} horas"
+                )
+
+        self.logger.info(f"Total registros escritos: {total_rows}")
+
+        spark.catalog.clearCache()
+
+        self._write_audit(total_rows)
         self.logger.info("SARIMAX trip-count forecaster completado exitosamente")
-        return n
+        return total_rows
 
     def _write_audit(self, rowcount: int) -> None:
         audit_path = ML_DIR / "audit.parquet"
@@ -363,5 +388,5 @@ class SariMaxModelPipeline:
         df_new = pl.DataFrame([row])
         if audit_path.exists():
             existing = pl.read_parquet(str(audit_path))
-            df_new = pl.concat([existing, df_new])
+            df_new = pl.concat([existing, df_new], how="diagonal")
         df_new.write_parquet(str(audit_path))

@@ -8,6 +8,7 @@ REASONABLENESS_RANGES: dict[str, dict[str, tuple[float, float]]] = {
         "tolls_amount": (0, 100),
         "improvement_surcharge": (0, 5),
         "congestion_surcharge": (0, 5),
+        "cbd_congestion_fee": (0, 5),
         "airport_fee": (0, 5),
         "mta_tax": (0, 5),
         "extra": (-5, 20),
@@ -22,6 +23,7 @@ REASONABLENESS_RANGES: dict[str, dict[str, tuple[float, float]]] = {
         "ehail_fee": (0, 10),
         "improvement_surcharge": (0, 5),
         "congestion_surcharge": (0, 5),
+        "cbd_congestion_fee": (0, 5),
         "mta_tax": (0, 5),
         "extra": (-5, 20),
     },
@@ -38,6 +40,7 @@ REASONABLENESS_RANGES: dict[str, dict[str, tuple[float, float]]] = {
         "bcf": (0, 5),
         "sales_tax": (0, 5),
         "congestion_surcharge": (0, 5),
+        "cbd_congestion_fee": (0, 5),
         "airport_fee": (0, 5),
     },
 }

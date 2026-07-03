@@ -99,10 +99,11 @@ class Reasonableness(Dimension):
                 combined = oor_conditions[0]
                 for cond in oor_conditions[1:]:
                     combined = combined | cond
-                failures_sample = [
-                    row.asDict()
-                    for row in df.filter(combined).limit(10).collect()
-                ]
+                # Via helper: timestamps pre-1970 rompen el collect crudo en
+                # Windows (OSError 22); la muestra va como strings al JSON.
+                failures_sample = self.collect_sample_as_strings(
+                    df.filter(combined)
+                )
 
         return DimensionResult(
             dimension=self.name,

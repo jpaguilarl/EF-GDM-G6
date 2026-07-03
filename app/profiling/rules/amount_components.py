@@ -10,6 +10,10 @@ AMOUNT_FORMULAS: dict[str, dict[str, str | list[str]]] = {
             "improvement_surcharge",
             "congestion_surcharge",
             "airport_fee",
+            # Peaje CBD (Congestion Relief Zone de la MTA) anadido por la TLC a
+            # partir de 2025; es parte de total_amount. Omitirlo hacia que la
+            # correccion de accuracy restara ~0.75 USD a cada viaje de 2025.
+            "cbd_congestion_fee",
         ],
     },
     "green": {
@@ -23,6 +27,9 @@ AMOUNT_FORMULAS: dict[str, dict[str, str | list[str]]] = {
             "ehail_fee",
             "improvement_surcharge",
             "congestion_surcharge",
+            # Peaje CBD (Congestion Relief Zone de la MTA), TLC 2025+; parte de
+            # total_amount (ver nota en la formula de yellow).
+            "cbd_congestion_fee",
         ],
     },
     "fhvhv": {

@@ -26,9 +26,24 @@ class KModesFeatures(TripGrainMart):
     subdir = "ml"
     applies_to = {"yellow", "green", "fhvhv"}
 
+    # KModesModelPipeline entrena con max_sample_per_service=100k filas: emitir
+    # los ~240M de viajes fhvhv al feature store es trabajo que nadie consume.
+    # Un 5% de fhvhv (~12M filas, muestreo uniforme reproducible) sigue siendo
+    # 120x lo que el modelo usa. yellow/green se emiten completos (son chicos y
+    # los comparte el analisis exploratorio). Silver conserva el 100% de los
+    # viajes; esto solo dimensiona el insumo de entrenamiento.
+    FHVHV_SAMPLE_FRACTION = 0.05
+    SAMPLE_SEED = 42
+
     def transform(
         self, fact: DataFrame, category: str, year: int, month: int, ctx: GoldContext
     ) -> DataFrame | None:
+        if category == "fhvhv":
+            fact = fact.sample(
+                withReplacement=False,
+                fraction=self.FHVHV_SAMPLE_FRACTION,
+                seed=self.SAMPLE_SEED,
+            )
         zone = ctx.gold_dims["zone"]
         df = with_zone(fact, zone, PU_LOC, "pu")
         df = with_zone(df, zone, DO_LOC, "do")

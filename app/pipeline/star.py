@@ -1,3 +1,4 @@
+import concurrent.futures
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from app.pipeline.silver import SilverCleaner
 from app.schemas.settings_schema import DatasetsConfig, Module
 from app.utils.globals import globals
 from app.utils.logger import Logger
+from app.utils.spark import target_files
 
 DIMS_DIR = globals.project_root / "data/silver/star/dims"
 FACTS_DIR = globals.project_root / "data/silver/star/facts"
@@ -196,6 +198,13 @@ class StarSchemaBuilder:
     # Build fact tables
     # ------------------------------------------------------------------
 
+    # 3 facts en paralelo (mismo razonamiento que SilverPipeline): los jobs
+    # comparten los task slots de local[6]; la ganancia esta en solapar las
+    # fases poco paralelas (lectura de un archivo, escritura coalesceada) de un
+    # fact con el computo del otro. Sin estado compartido mutable: los dims son
+    # DataFrames inmutables y aqui no se escribe auditoria.
+    MAX_PARALLEL_FACTS = 3
+
     def build_facts(self, year_span: DatasetsConfig) -> None:
         dims = {
             "date": self._read_dim("dim_date"),
@@ -206,14 +215,36 @@ class StarSchemaBuilder:
             "service": self._read_dim("dim_service"),
         }
 
+        tasks: list[tuple[str, int, int]] = []
         for year in year_span.years:
             if isinstance(year, int):
                 for cat in globals.tlc_categories:
                     for m in range(1, 13):
-                        self._build_fact(cat, year, m, dims)
+                        tasks.append((cat, year, m))
             elif isinstance(year, Module):
                 for m in range(1, 13):
-                    self._build_fact(year.category, year.year, m, dims)
+                    tasks.append((year.category, year.year, m))
+
+        failures: list[str] = []
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=self.MAX_PARALLEL_FACTS
+        ) as executor:
+            futures = {
+                executor.submit(self._build_fact, cat, year, m, dims): (cat, year, m)
+                for (cat, year, m) in tasks
+            }
+            for future in concurrent.futures.as_completed(futures):
+                cat, year, m = futures[future]
+                try:
+                    future.result()
+                except Exception as e:
+                    self.logger.error(f"  Error en fact {cat} {year}-{m:02d}: {e}")
+                    failures.append(f"{cat} {year}-{m:02d}")
+
+        if failures:
+            raise RuntimeError(
+                f"Carga de facts fallo en {len(failures)} archivo(s): {', '.join(sorted(failures))}"
+            )
 
     def _build_fact(
         self,
@@ -226,6 +257,17 @@ class StarSchemaBuilder:
         full_path = globals.project_root / source
         if not full_path.exists():
             self.logger.info(f"  No se encontró {source}, saltando")
+            return
+
+        # Idempotencia: fact mensual ya construido -> no se recalcula. Se exige
+        # la marca _SUCCESS (commit del job), no la mera existencia del
+        # directorio: un job matado deja el directorio con solo _temporary.
+        # Para reconstruir un mes, borrar su directorio en star/facts.
+        fact_out = FACTS_DIR / f"fact_{category}_trip" / f"{year}-{month:02d}.parquet"
+        if (fact_out / "_SUCCESS").exists():
+            self.logger.info(
+                f"  fact_{category}_trip/{year}-{month:02d}: ya existe, se omite"
+            )
             return
 
         try:
@@ -277,9 +319,13 @@ class StarSchemaBuilder:
         out_dir = FACTS_DIR / f"fact_{category}_trip"
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = str(out_dir / f"{year}-{month:02d}.parquet")
-        fact_df.write.mode("overwrite").parquet(out_path)
+        # fact_df es proyeccion pura de trip_df (sin filtros): mismo numero de
+        # filas. Reusar row_count evita un segundo count() sobre 20M filas.
+        fact_df.coalesce(target_files(row_count)).write.mode("overwrite").parquet(
+            out_path
+        )
         self.logger.info(
-            f"  fact_{category}_trip/{year}-{month:02d}.parquet: {fact_df.count()} filas"
+            f"  fact_{category}_trip/{year}-{month:02d}.parquet: {row_count} filas"
         )
 
     # ------------------------------------------------------------------
@@ -341,18 +387,27 @@ class _FactBuilder:
         return df.withColumn("trip_duration_minutes", F.round(dur, 2))
 
     def _add_trip_id(self, df: DataFrame) -> DataFrame:
-        """Surrogate key = sha2 hash of the silver composite PK (single source of
+        """Surrogate key = xxhash64 of the silver composite PK (single source of
         truth in ``SilverCleaner.COMPOSITE_KEYS``). Carried into gold for
-        drill-through / dedup across the medallion."""
+        drill-through / dedup across the medallion.
+
+        Se usa ``xxhash64`` (BIGINT de 8 bytes) en vez de ``sha2`` hex (string de
+        64 chars). El hash hex es de alta entropia: no se puede codificar por
+        diccionario y apenas comprime, por lo que ocupaba ~67% del tamano del
+        fact y se propagaba a casi todos los marts. Un BIGINT es ~8x mas pequeno,
+        ideal como clave de relacion en Power BI, y determinista (mismo PK ->
+        mismo id entre corridas). La unicidad estricta ya la garantiza silver via
+        COMPOSITE_KEYS; trip_id es una clave de drill-through, no de deduplicacion
+        por join, asi que la probabilidad de colision de 64 bits es aceptable."""
         key_cols = SilverCleaner.COMPOSITE_KEYS.get(self.category, [])
         key_cols = [c for c in key_cols if c in df.columns]
         if not key_cols:
-            return df.withColumn("trip_id", F.lit(None).cast("string"))
+            return df.withColumn("trip_id", F.lit(None).cast("long"))
         concat = F.concat_ws(
             "||",
             *[F.coalesce(F.col(c).cast("string"), F.lit("")) for c in key_cols],
         )
-        return df.withColumn("trip_id", F.sha2(concat, 256))
+        return df.withColumn("trip_id", F.xxhash64(concat))
 
     def _prepare(self) -> DataFrame:
         """Common pre-projection enrichment: trip duration + trip_id."""
@@ -418,6 +473,7 @@ class _FactBuilder:
                 "total_amount",
                 "congestion_surcharge",
                 "airport_fee",
+                "cbd_congestion_fee",
                 "trip_duration_minutes",
             ],
         )
@@ -453,6 +509,7 @@ class _FactBuilder:
                 "improvement_surcharge",
                 "total_amount",
                 "congestion_surcharge",
+                "cbd_congestion_fee",
                 "trip_type",
                 "trip_duration_minutes",
             ],
@@ -487,6 +544,7 @@ class _FactBuilder:
                 "sales_tax",
                 "congestion_surcharge",
                 "airport_fee",
+                "cbd_congestion_fee",
                 "tips",
                 "driver_pay",
                 "shared_request_flag",

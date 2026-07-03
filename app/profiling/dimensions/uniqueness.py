@@ -76,10 +76,9 @@ class Uniqueness(Dimension):
 
         failures_sample = []
         if dup_count > 0:
-            failures_sample = [
-                row.asDict()
-                for row in df.filter(dup_mask).limit(10).collect()
-            ]
+            # Via helper: timestamps pre-1970 rompen el collect crudo en
+            # Windows (OSError 22); la muestra va como strings al JSON.
+            failures_sample = self.collect_sample_as_strings(df.filter(dup_mask))
 
         return DimensionResult(
             dimension=self.name,

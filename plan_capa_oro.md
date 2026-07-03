@@ -105,8 +105,8 @@ Granularidad: 1 fila por viaje.
 
 Columnas:
 - `trip_id`, `service_id`, `date_key`, `year`, `month`, `pickup_datetime`
-- Componentes tarifa (yellow/green): `fare_amount, extra, mta_tax, tip_amount, tolls_amount, improvement_surcharge, congestion_surcharge, airport_fee, total_amount, ehail_fee`
-- Componentes HVFHV: `base_passenger_fare, tolls, bcf, sales_tax, congestion_surcharge, airport_fee, tips, driver_pay`
+- Componentes tarifa (yellow/green): `fare_amount, extra, mta_tax, tip_amount, tolls_amount, improvement_surcharge, congestion_surcharge, cbd_congestion_fee, airport_fee, total_amount, ehail_fee` (`cbd_congestion_fee` solo 2025+)
+- Componentes HVFHV: `base_passenger_fare, tolls, bcf, sales_tax, congestion_surcharge, cbd_congestion_fee, airport_fee, tips, driver_pay` (`cbd_congestion_fee` solo 2025+)
 - `trip_distance` (taxis) / `trip_miles` (fhvhv)
 - Computadas:
   - `margen_plataforma = base_passenger_fare - driver_pay` (fhvhv)

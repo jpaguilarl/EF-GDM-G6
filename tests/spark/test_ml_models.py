@@ -40,7 +40,7 @@ def test_isolation_forest_normal_training(spark, settings, monkeypatch, tmp_path
     for i in range(10):
         rows.append(
             Row(
-                trip_id=f"trip_{i}",
+                trip_id=i,  # xxhash64 BIGINT en produccion; aqui entero de prueba
                 ratecode_id=1,
                 service_id="yellow",
                 year=2024,
@@ -57,7 +57,7 @@ def test_isolation_forest_normal_training(spark, settings, monkeypatch, tmp_path
     for i in range(10, 20):
         rows.append(
             Row(
-                trip_id=f"trip_{i}",
+                trip_id=i,  # xxhash64 BIGINT en produccion; aqui entero de prueba
                 ratecode_id=2,
                 service_id="yellow",
                 year=2024,
@@ -114,7 +114,7 @@ def test_isolation_forest_low_rows_skipped(spark, settings, monkeypatch, tmp_pat
     for i in range(3):
         rows.append(
             Row(
-                trip_id=f"trip_{i}",
+                trip_id=i,  # xxhash64 BIGINT en produccion; aqui entero de prueba
                 ratecode_id=1,
                 service_id="yellow",
                 year=2024,
@@ -131,7 +131,7 @@ def test_isolation_forest_low_rows_skipped(spark, settings, monkeypatch, tmp_pat
     for i in range(3, 6):
         rows.append(
             Row(
-                trip_id=f"trip_{i}",
+                trip_id=i,  # xxhash64 BIGINT en produccion; aqui entero de prueba
                 ratecode_id=2,
                 service_id="yellow",
                 year=2024,
@@ -191,7 +191,7 @@ def test_isolation_forest_output_schema(spark, settings, monkeypatch, tmp_path):
     for i in range(10):
         rows.append(
             Row(
-                trip_id=f"trip_{i}",
+                trip_id=i,  # xxhash64 BIGINT en produccion; aqui entero de prueba
                 ratecode_id=1,
                 service_id="yellow",
                 year=2024,

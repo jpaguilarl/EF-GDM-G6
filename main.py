@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+from pathlib import Path
 
 from app.pipeline.bronze import BronzePipeline
 from app.pipeline.gold.ml.isolation_forest_model import IsolationForestModelPipeline
@@ -138,9 +139,100 @@ def run_gold_ml_pipeline(which: str) -> None:
             logger.info("Modelos en data/gold/models/sarimax/")
 
 
+def _missing_bronze(datasets) -> list[str]:
+    """Archivos bronce esperados que faltan o tienen footer parquet ilegible."""
+    import pyarrow.parquet as pq
+
+    from app.schemas.settings_schema import Module
+    from app.utils.globals import globals
+
+    expected: list[Path] = []
+    for year in datasets.years:
+        if isinstance(year, int):
+            for cat in globals.tlc_categories:
+                for m in range(1, 13):
+                    expected.append(Path(f"data/bronze/{cat}/{year}-{m:02d}.parquet"))
+        elif isinstance(year, Module):
+            for m in range(1, 13):
+                expected.append(
+                    Path(f"data/bronze/{year.category}/{year.year}-{m:02d}.parquet")
+                )
+
+    missing: list[str] = []
+    for f in expected:
+        try:
+            pq.ParquetFile(f)
+        except Exception:
+            missing.append(str(f))
+    return missing
+
+
+def run_full_pipeline() -> None:
+    """Pipeline completo end-to-end con un solo comando (replicacion).
+
+    Orden: bronce -> verificacion de completitud de bronce (fail-loud, con un
+    reintento: CloudFront responde 403 transitorios cuando la rafaga de
+    descargas es grande y el pipeline de bronce NO falla por errores HTTP) ->
+    silver calidad -> esquema -> carga -> gold incremental -> profiling.
+
+    Profiling corre AL FINAL a proposito: es documentacion de solo lectura que
+    no alimenta a silver ni a gold, asi los marts llegan horas antes.
+
+    Todas las fases son idempotentes (ver CLAUDE.md): re-ejecutar este comando
+    tras un corte o fallo retoma exactamente donde quedo sin repetir trabajo.
+    Cualquier fallo de fase se propaga (exit != 0): no hay exito silencioso.
+    """
+    logger = Logger()
+    settings = Settings()
+    datasets = settings.config.datasets
+
+    logger.info("=== PIPELINE (1/7): bronce (descarga idempotente) ===")
+    asyncio.run(run_bronze_pipeline())
+
+    logger.info("=== PIPELINE (2/7): verificacion de completitud de bronce ===")
+    missing = _missing_bronze(datasets)
+    if missing:
+        logger.warning(
+            f"{len(missing)} archivos bronce faltantes/ilegibles; reintentando "
+            "descarga (403 transitorio de CloudFront en rafagas grandes)"
+        )
+        asyncio.run(run_bronze_pipeline())
+        missing = _missing_bronze(datasets)
+    if missing:
+        raise RuntimeError(
+            f"Bronce incompleto tras reintento ({len(missing)} archivos): "
+            + ", ".join(missing[:8])
+            + ("..." if len(missing) > 8 else "")
+        )
+    logger.info("Bronce verificado: todos los archivos esperados legibles")
+
+    logger.info("=== PIPELINE (3/7): silver calidad ===")
+    run_silver_quality()
+
+    logger.info("=== PIPELINE (4/7): silver esquema ===")
+    run_silver_schema()
+
+    logger.info("=== PIPELINE (5/7): silver carga ===")
+    run_silver_load()
+
+    logger.info("=== PIPELINE (6/7): gold (incremental) ===")
+    run_gold_pipeline("incremental", None)
+
+    logger.info("=== PIPELINE (7/7): profiling ===")
+    asyncio.run(run_profiling_pipeline())
+
+    logger.info("=== PIPELINE COMPLETO: 7/7 fases OK ===")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="ETL pipeline para NY TLC Trip Record Data"
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Pipeline completo: bronce -> verificacion -> silver -> esquema -> "
+        "carga -> gold incremental -> profiling. Idempotente y reanudable.",
     )
     parser.add_argument(
         "--profile",
@@ -178,7 +270,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if args.silver:
+    if args.all:
+        run_full_pipeline()
+    elif args.silver:
         if args.silver == "quality":
             run_silver_quality()
         elif args.silver == "schema":
