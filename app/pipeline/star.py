@@ -15,6 +15,7 @@ from pyspark.sql.types import (
 
 from app.pipeline.silver import SilverCleaner
 from app.schemas.settings_schema import DatasetsConfig, Module
+from app.utils import storage
 from app.utils.globals import globals
 from app.utils.logger import Logger
 from app.utils.spark import target_files
@@ -138,7 +139,7 @@ class StarSchemaBuilder:
             ]
         )
         df = self.spark.createDataFrame(rows, schema)
-        path = str(DIMS_DIR / "dim_date.parquet")
+        path = storage.for_spark(DIMS_DIR / "dim_date.parquet")
         DIMS_DIR.mkdir(parents=True, exist_ok=True)
         df.write.mode("overwrite").parquet(path)
         self.logger.info(f"  dim_date: {len(rows)} registros")
@@ -151,11 +152,11 @@ class StarSchemaBuilder:
             self.logger.warning("  dim_zone: no se encontró zone-lookup-table")
             return
         read_cols = ["LocationID", "Borough", "Zone", "service_zone"]
-        df = self.spark.read.parquet(str(zone_path))
+        df = self.spark.read.parquet(storage.for_spark(zone_path))
         available = [c for c in read_cols if c in df.columns]
         if available:
             df = df.select(*available)
-        path = str(DIMS_DIR / "dim_zone.parquet")
+        path = storage.for_spark(DIMS_DIR / "dim_zone.parquet")
         DIMS_DIR.mkdir(parents=True, exist_ok=True)
         df.write.mode("overwrite").parquet(path)
         self.logger.info(f"  dim_zone: {df.count()} registros")
@@ -174,7 +175,7 @@ class StarSchemaBuilder:
             ]
         )
         df = self.spark.createDataFrame(rows, schema)
-        path = str(DIMS_DIR / f"{dim_name}.parquet")
+        path = storage.for_spark(DIMS_DIR / f"{dim_name}.parquet")
         DIMS_DIR.mkdir(parents=True, exist_ok=True)
         df.write.mode("overwrite").parquet(path)
         self.logger.info(f"  {dim_name}: {len(rows)} registros")
@@ -189,7 +190,7 @@ class StarSchemaBuilder:
             ]
         )
         df = self.spark.createDataFrame(SERVICE_ROWS, schema)
-        path = str(DIMS_DIR / "dim_service.parquet")
+        path = storage.for_spark(DIMS_DIR / "dim_service.parquet")
         DIMS_DIR.mkdir(parents=True, exist_ok=True)
         df.write.mode("overwrite").parquet(path)
         self.logger.info(f"  dim_service: {len(SERVICE_ROWS)} registros")
@@ -225,21 +226,35 @@ class StarSchemaBuilder:
                 for m in range(1, 13):
                     tasks.append((year.category, year.year, m))
 
+        heavy_cats = {"fhvhv", "yellow"}
+        heavy_tasks = [t for t in tasks if t[0] in heavy_cats]
+        light_tasks = [t for t in tasks if t[0] not in heavy_cats]
+
         failures: list[str] = []
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=self.MAX_PARALLEL_FACTS
-        ) as executor:
-            futures = {
-                executor.submit(self._build_fact, cat, year, m, dims): (cat, year, m)
-                for (cat, year, m) in tasks
-            }
-            for future in concurrent.futures.as_completed(futures):
-                cat, year, m = futures[future]
-                try:
-                    future.result()
-                except Exception as e:
-                    self.logger.error(f"  Error en fact {cat} {year}-{m:02d}: {e}")
-                    failures.append(f"{cat} {year}-{m:02d}")
+
+        def _run_pool(pool_tasks: list[tuple[str, int, int]], max_w: int) -> None:
+            if not pool_tasks:
+                return
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
+                futures_dict = {
+                    executor.submit(self._build_fact, cat, year, m, dims): (cat, year, m)
+                    for (cat, year, m) in pool_tasks
+                }
+                for future in concurrent.futures.as_completed(futures_dict):
+                    c, y, m_val = futures_dict[future]
+                    try:
+                        future.result()
+                    except Exception as e:
+                        self.logger.error(f"  Error en fact {c} {y}-{m_val:02d}: {e}")
+                        failures.append(f"{c} {y}-{m_val:02d}")
+
+        if heavy_tasks:
+            self.logger.info("Construyendo facts pesados (fhvhv, yellow) secuencialmente")
+            _run_pool(heavy_tasks, 1)
+        
+        if light_tasks:
+            self.logger.info("Construyendo facts livianos (green, fhv) en paralelo")
+            _run_pool(light_tasks, 3)
 
         if failures:
             raise RuntimeError(
@@ -271,7 +286,7 @@ class StarSchemaBuilder:
             return
 
         try:
-            trip_df = self.spark.read.parquet(str(full_path))
+            trip_df = self.spark.read.parquet(storage.for_spark(full_path))
         except Exception as e:
             self.logger.warning(f"  Error leyendo {source}: {e}")
             return
@@ -318,7 +333,7 @@ class StarSchemaBuilder:
 
         out_dir = FACTS_DIR / f"fact_{category}_trip"
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = str(out_dir / f"{year}-{month:02d}.parquet")
+        out_path = storage.for_spark(out_dir / f"{year}-{month:02d}.parquet")
         # fact_df es proyeccion pura de trip_df (sin filtros): mismo numero de
         # filas. Reusar row_count evita un segundo count() sobre 20M filas.
         fact_df.coalesce(target_files(row_count)).write.mode("overwrite").parquet(
@@ -333,7 +348,7 @@ class StarSchemaBuilder:
     # ------------------------------------------------------------------
 
     def _read_dim(self, name: str) -> DataFrame:
-        path = str(DIMS_DIR / f"{name}.parquet")
+        path = storage.for_spark(DIMS_DIR / f"{name}.parquet")
         return self.spark.read.parquet(path)
 
     @staticmethod

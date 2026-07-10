@@ -19,6 +19,7 @@ from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 from pyspark.storagelevel import StorageLevel
 
+from app.utils import storage
 from app.utils.globals import globals
 from app.utils.logger import Logger
 from app.utils.spark import target_files
@@ -101,7 +102,7 @@ class GoldContext:
         if not path.exists():
             return None
         try:
-            return self.spark.read.parquet(str(path))
+            return self.spark.read.parquet(storage.for_spark(path))
         except Exception as e:  # parquet vacio / corrupto: no abortar el mart
             self.logger.warning(f"  No se pudo leer {path.name}: {e}")
             return None
@@ -237,7 +238,7 @@ class GoldBuilder(ABC):
         writer = df.coalesce(num_files).write.mode("overwrite")
         if self.partition_keys:
             writer = writer.partitionBy(*self.partition_keys)
-        writer.parquet(str(self.output_dir))
+        writer.parquet(storage.for_spark(self.output_dir))
 
     @abstractmethod
     def build(self, ctx: GoldContext) -> int:

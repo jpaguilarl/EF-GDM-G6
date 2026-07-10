@@ -1,7 +1,6 @@
 from datetime import datetime
 from pathlib import Path
 
-import pyarrow.parquet as pq
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 from pyspark.storagelevel import StorageLevel
@@ -16,6 +15,7 @@ from app.profiling.dimensions.timeliness import Timeliness
 from app.profiling.dimensions.uniqueness import Uniqueness
 from app.profiling.dimensions.validity import Validity
 from app.profiling.schemas.profiling_schema import DatasetMeta, ProfilingReport
+from app.utils import storage
 from app.utils.logger import Logger
 from app.utils.spark import SparkClient
 
@@ -46,12 +46,12 @@ class DatasetProfiler:
     ) -> ProfilingReport:
         self.logger.info(f"Perfilando dataset: {category} {year}-{month:02d}")
 
-        pf = pq.ParquetFile(file_path)
+        pf = storage.parquet_file(file_path)
         rowcount = pf.metadata.num_rows
         columns = pf.schema_arrow.names
 
         session = self.spark.get_session()
-        df = session.read.parquet(str(file_path))
+        df = session.read.parquet(storage.for_spark(file_path))
         # Una sola lectura fisica por archivo: cada una de las 8 dimensiones
         # dispara sus propias acciones y sin persist el parquet se releia >=8
         # veces desde disco (dominaba el tiempo de profiling en HDD). Lo que no

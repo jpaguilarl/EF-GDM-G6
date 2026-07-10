@@ -1,6 +1,5 @@
 import argparse
 import asyncio
-from pathlib import Path
 
 from app.pipeline.bronze import BronzePipeline
 from app.pipeline.gold.ml.isolation_forest_model import IsolationForestModelPipeline
@@ -141,28 +140,25 @@ def run_gold_ml_pipeline(which: str) -> None:
 
 def _missing_bronze(datasets) -> list[str]:
     """Archivos bronce esperados que faltan o tienen footer parquet ilegible."""
-    import pyarrow.parquet as pq
-
     from app.schemas.settings_schema import Module
+    from app.utils import storage
     from app.utils.globals import globals
 
-    expected: list[Path] = []
+    expected: list = []
     for year in datasets.years:
         if isinstance(year, int):
             for cat in globals.tlc_categories:
                 for m in range(1, 13):
-                    expected.append(Path(f"data/bronze/{cat}/{year}-{m:02d}.parquet"))
+                    expected.append(storage.data_path("bronze", cat, f"{year}-{m:02d}.parquet"))
         elif isinstance(year, Module):
             for m in range(1, 13):
                 expected.append(
-                    Path(f"data/bronze/{year.category}/{year.year}-{m:02d}.parquet")
+                    storage.data_path("bronze", year.category, f"{year.year}-{m:02d}.parquet")
                 )
 
     missing: list[str] = []
     for f in expected:
-        try:
-            pq.ParquetFile(f)
-        except Exception:
+        if not storage.parquet_footer_readable(f):
             missing.append(str(f))
     return missing
 

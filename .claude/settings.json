@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-Command uv -ErrorAction SilentlyContinue; Get-ChildItem \"$env:USERPROFILE\\\\.local\\\\bin\" -ErrorAction SilentlyContinue; Get-ChildItem \"C:\\\\Users\\\\joseg\\\\Desktop\\\\Mix_EF\\\\EF-GDM-G6\\\\.venv\\\\Scripts\" -ErrorAction SilentlyContinue | Select-Object -First 20)"
+    ]
+  }
+}

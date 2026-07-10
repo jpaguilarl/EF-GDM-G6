@@ -15,6 +15,7 @@ from app.profiling.rules.reasonableness_ranges import (
     REASONABLENESS_RANGES,
 )
 from app.schemas.settings_schema import DatasetsConfig, Module
+from app.utils import storage
 from app.utils.globals import globals
 from app.utils.logger import Logger
 from app.utils.spark import SparkClient, target_files
@@ -354,31 +355,44 @@ class SilverPipeline:
         tasks = self._expand_tasks(year_span)
         failures: list[str] = []
 
-        # Un SilverCleaner por archivo: su cache de DataFrames persistidos es por
-        # instancia, y cleanup() de un worker no debe despersistir los del otro.
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=self.MAX_PARALLEL_FILES
-        ) as executor:
-            futures = {
-                executor.submit(
-                    self._process_file,
-                    spark,
-                    SilverCleaner(spark),
-                    cat,
-                    year,
-                    month,
-                    zone_ids,
-                    bronze_audit_id,
-                ): (cat, year, month)
-                for (cat, year, month) in tasks
-            }
-            for future in concurrent.futures.as_completed(futures):
-                cat, year, month = futures[future]
-                try:
-                    future.result()
-                except Exception as e:
-                    self.logger.error(f"Error procesando {cat} {year}-{month:02d}: {e}")
-                    failures.append(f"{cat} {year}-{month:02d}")
+        heavy_cats = {"fhvhv", "yellow"}
+        heavy_tasks = [t for t in tasks if t[0] in heavy_cats]
+        light_tasks = [t for t in tasks if t[0] not in heavy_cats]
+
+        def _run_pool(pool_tasks: list[tuple[str, int, int]], max_w: int) -> None:
+            if not pool_tasks:
+                return
+            # Un SilverCleaner por archivo: su cache de DataFrames persistidos es por
+            # instancia, y cleanup() de un worker no debe despersistir los del otro.
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
+                futures_dict = {
+                    executor.submit(
+                        self._process_file,
+                        spark,
+                        SilverCleaner(spark),
+                        cat,
+                        year,
+                        month,
+                        zone_ids,
+                        bronze_audit_id,
+                    ): (cat, year, month)
+                    for (cat, year, month) in pool_tasks
+                }
+                for future in concurrent.futures.as_completed(futures_dict):
+                    c, y, m = futures_dict[future]
+                    try:
+                        future.result()
+                    except Exception as e:
+                        self.logger.error(f"Error procesando {c} {y}-{m:02d}: {e}")
+                        failures.append(f"{c} {y}-{m:02d}")
+
+        if heavy_tasks:
+            self.logger.info("Procesando datasets pesados (fhvhv, yellow) secuencialmente")
+            _run_pool(heavy_tasks, 1)
+
+        if light_tasks:
+            self.logger.info("Procesando datasets livianos (green, fhv) en paralelo")
+            _run_pool(light_tasks, 2)
 
         if failures:
             # Fallar ruidosamente: un mes ausente en stage seria perdida de datos
@@ -437,7 +451,7 @@ class SilverPipeline:
         bronze_audit_id: str,
     ) -> None:
         source = f"data/bronze/{category}/{year}-{month:02d}.parquet"
-        full_path = str(globals.project_root / source)
+        full_path = storage.data_path("bronze", category, f"{year}-{month:02d}.parquet")
 
         # Idempotencia: el mes se omite SOLO si stage Y reject tienen su marca
         # _SUCCESS (la escribe Spark al commitear el job). La sola existencia
@@ -467,7 +481,7 @@ class SilverPipeline:
         self.logger.info(f"Procesando {source}")
 
         tag = f"{category} {year}-{month:02d}"
-        df = spark.read.parquet(full_path).persist(StorageLevel.MEMORY_AND_DISK)
+        df = spark.read.parquet(storage.for_spark(full_path)).persist(StorageLevel.MEMORY_AND_DISK)
         bronze_rowcount = df.count()
         self.logger.info(f"  {tag} | Bronce: {bronze_rowcount} filas")
 
@@ -481,7 +495,7 @@ class SilverPipeline:
         silver_dir = globals.project_root / "data/silver/stage" / category
         silver_dir.mkdir(parents=True, exist_ok=True)
         clean_df.coalesce(target_files(clean_count)).write.mode("overwrite").parquet(
-            str(silver_dir / f"{year}-{month:02d}.parquet")
+            storage.for_spark(silver_dir / f"{year}-{month:02d}.parquet")
         )
 
         if reject_count > 0:
@@ -489,7 +503,7 @@ class SilverPipeline:
             reject_dir.mkdir(parents=True, exist_ok=True)
             reject_df.coalesce(target_files(reject_count)).write.mode(
                 "overwrite"
-            ).parquet(str(reject_dir / f"{year}-{month:02d}.parquet"))
+            ).parquet(storage.for_spark(reject_dir / f"{year}-{month:02d}.parquet"))
 
         cleaner.cleanup()
 
@@ -511,7 +525,7 @@ class SilverPipeline:
             self.logger.warning("No se encontró audit de bronce, usando 'unknown'")
             return "unknown"
         try:
-            df = spark.read.parquet(str(audit_path))
+            df = spark.read.parquet(storage.for_spark(audit_path))
             latest = (
                 df.orderBy(F.col("start_timestamp").desc()).select("audit_id").first()
             )
@@ -529,7 +543,7 @@ class SilverPipeline:
                 "No se encontró zone-lookup-table, devolviendo set vacío"
             )
             return set()
-        df = spark.read.parquet(str(zone_path))
+        df = spark.read.parquet(storage.for_spark(zone_path))
         if "LocationID" not in df.columns:
             return set()
         return {

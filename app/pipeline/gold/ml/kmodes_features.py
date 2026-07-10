@@ -19,6 +19,7 @@ from app.pipeline.gold.mart_builder import (
     col_or_null,
     with_zone,
 )
+from app.utils import storage
 
 
 class KModesFeatures(TripGrainMart):
@@ -73,13 +74,13 @@ class KModesFeatures(TripGrainMart):
             base_cols["passenger_group"] = F.lit(None).cast("string")
         else:
             payment_type = ctx.spark.read.parquet(
-                str(SILVER_DIMS_DIR / "dim_payment_type.parquet")
+                storage.for_spark(SILVER_DIMS_DIR / "dim_payment_type.parquet")
             ).select(
                 F.col("payment_type_id").alias("_pt_id"),
                 F.col("payment_type_name"),
             )
             ratecode = ctx.spark.read.parquet(
-                str(SILVER_DIMS_DIR / "dim_ratecode.parquet")
+                storage.for_spark(SILVER_DIMS_DIR / "dim_ratecode.parquet")
             ).select(
                 F.col("ratecode_id").alias("_rc_id"),
                 F.col("ratecode_name"),

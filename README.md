@@ -30,6 +30,10 @@ Las cuatro categorías TLC: **green**, **yellow**, **fhv**, **fhvhv**.
 - **Idempotente y reanudable**: cada capa omite las salidas ya materializadas (descargas,
   perfiles, stage, facts, particiones gold); una corrida interrumpida se reanuda donde quedó.
 - **Auditoría encadenada** entre capas (`bronze_audit_id → silver_audit_id → gold_audit_id`).
+- **Backend de almacenamiento intercambiable**: todas las capas leen/escriben en el
+  filesystem local (default) o en **S3**, con solo cambiar `STORAGE_BACKEND` — sin duplicar código.
+- **Orquestación opcional con Airflow sobre Docker Compose**: cada fase del pipeline es su propio
+  DAG encadenado, además del `uv run main.py` de siempre.
 - **Configurable** vía `config.yaml` (años/categorías, parámetros de la capa gold e
   hiperparámetros de los modelos).
 
@@ -156,6 +160,69 @@ gold:
     max_sample_per_service: 100000
 ```
 
+## Backend de almacenamiento (local o S3)
+
+Todas las capas (`bronze/silver/gold/profiling` + los 3 `audit.parquet`) pueden vivir en el
+**filesystem local** (default) o en **S3**, sin mezclar por capa y sin código duplicado entre
+backends. Se controla con una sola variable, `STORAGE_BACKEND`, en `.env` (ver `.env.example`):
+
+```bash
+cp .env.example .env          # y completar credenciales si se usa S3
+uv sync --extra s3            # instala s3fs (cliente S3 de la app; Spark usa hadoop-aws aparte)
+```
+
+```dotenv
+STORAGE_BACKEND=s3            # local (default) | s3
+AWS_ACCESS_KEY_ID=...         # leídas del entorno, nunca de config.yaml
+AWS_SECRET_ACCESS_KEY=...
+AWS_REGION=us-east-1
+S3_BUCKET=mi-bucket
+S3_PREFIX=tlc-pipeline
+```
+
+La abstracción vive en `app/utils/storage.py` (`get_root()` devuelve un `Path` local o un `S3Path`
+vía `s3fs`); el resto del pipeline compone rutas igual que siempre, solo cambia la raíz. Con backend
+local el comportamiento es idéntico byte a byte al de antes de introducir la abstracción.
+
+> [!NOTE]
+> El shuffle/spill de Spark (`spark.local.dir`) **siempre** se queda en disco local, incluso con
+> `STORAGE_BACKEND=s3`: mandarlo a S3 añadiría latencia de red a una operación ya intensiva en memoria.
+
+## Ejecución con Docker + Airflow
+
+Además del `uv run main.py` local, el pipeline puede orquestarse con **Airflow sobre Docker Compose**
+(`docker-compose.yml` + `Dockerfile`): Postgres (metadatos) + webserver + scheduler en `LocalExecutor`,
+más un servicio opcional `jupyter` para los notebooks de revisión. Spark corre **embebido** en el
+proceso de cada tarea (no hay clúster Spark aparte).
+
+```bash
+uv lock                              # una vez, tras añadir los extras s3/jupyter (commitear uv.lock)
+docker compose build
+docker compose up airflow-init       # inicializa la metadata DB (una vez)
+docker compose up                    # levanta webserver + scheduler (+ postgres)
+```
+
+Cada fase es su **propio DAG**, encadenados con `TriggerDagRunOperator(wait_for_completion=True)`:
+
+```
+dag_01_bronze → dag_02_silver_quality → dag_03_silver_schema → dag_04_silver_load → dag_05_gold → dag_06_profiling
+dag_07_gold_ml   # entrenamiento (kmodes/isolation/sarimax), se dispara manualmente desde la UI
+```
+
+Todos los DAGs son `BashOperator`s finos que invocan el mismo CLI (`uv run main.py ...`) — no
+reimplementan lógica del pipeline. El *profiling* corre al final a propósito (documentación de solo
+lectura que no alimenta silver/gold).
+
+> [!IMPORTANT]
+> **Despausa los 7 DAGs** (`dag_01`…`dag_07`) en la UI antes de disparar `dag_01_bronze`: la cadena
+> `TriggerDagRunOperator` queda encolada para siempre si un DAG río abajo está en pausa.
+
+> [!TIP]
+> **Memoria (Windows/Docker Desktop)**: el VM de WSL2 necesita **≥8 GB**. `docker-compose.yml` baja el
+> default de Spark a `8g`/`local[8]` (vía `SPARK_DRIVER_MEMORY`/`SPARK_MASTER_CORES`) porque comparte RAM
+> con Airflow + Postgres; ajústalo en `.env` según tu VM. El shuffle va a `/tmp/spark-temp` (disco del
+> contenedor), no al bind mount de `./data` (I/O lenta vía gRPC-FUSE).
+
 ## Estructura del proyecto
 
 ```
@@ -174,10 +241,13 @@ app/
 │       └── ml/                    # 3 feature stores + 3 pipelines de modelos
 ├── profiling/                     # Profiling de calidad (8 dimensiones)
 ├── schemas/settings_schema.py     # Validación de config (Pydantic)
-└── utils/                         # spark, logger, globals, settings
+└── utils/                         # spark, logger, globals, settings, storage (local/S3)
+dags/                              # 7 DAGs de Airflow (uno por fase del pipeline)
 notebooks/                         # Revisión por capa (bronze → gold → auditoría)
 tests/                             # unit / spark / integration (pytest)
 config.yaml                        # Configuración del pipeline
+Dockerfile / docker-compose.yml    # Ejecución orquestada con Airflow
+.env.example                       # STORAGE_BACKEND, credenciales AWS, bootstrap Airflow
 main.py                            # Punto de entrada (CLI)
 ```
 

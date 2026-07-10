@@ -18,6 +18,7 @@ from pyspark.sql.types import (
 from app.pipeline.gold.feature_rules import ratecode_tariff as rt
 from app.pipeline.gold.feature_rules import time_blocks as tb
 from app.pipeline.gold.mart_builder import GOLD_DIMS_DIR, SILVER_DIMS_DIR
+from app.utils import storage
 from app.utils.logger import Logger
 
 # date_keys (YYYYMMDD) de feriados federales observados en NYC, 2023-2025.
@@ -60,7 +61,7 @@ class GoldDimensionsBuilder:
     # ------------------------------------------------------------------
     def _build_dim_date_gold(self) -> DataFrame:
         src = SILVER_DIMS_DIR / "dim_date.parquet"
-        df = self.spark.read.parquet(str(src))
+        df = self.spark.read.parquet(storage.for_spark(src))
         df = df.withColumn("dia_categoria", tb.dia_categoria(F.col("weekday")))
         df = df.withColumn(
             "is_holiday", F.col("date_key").isin(list(HOLIDAY_DATE_KEYS))
@@ -71,7 +72,7 @@ class GoldDimensionsBuilder:
 
     def _build_dim_zone_gold(self) -> DataFrame:
         src = SILVER_DIMS_DIR / "dim_zone.parquet"
-        df = self.spark.read.parquet(str(src))
+        df = self.spark.read.parquet(storage.for_spark(src))
 
         borough_es = F.col("Borough")
         for eng, es in BOROUGH_ES.items():
@@ -99,5 +100,5 @@ class GoldDimensionsBuilder:
 
     # ------------------------------------------------------------------
     def _write(self, df: DataFrame, name: str) -> None:
-        path = str(GOLD_DIMS_DIR / f"{name}.parquet")
+        path = storage.for_spark(GOLD_DIMS_DIR / f"{name}.parquet")
         df.coalesce(1).write.mode("overwrite").parquet(path)

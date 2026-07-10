@@ -25,6 +25,7 @@ from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 from sklearn.metrics import silhouette_score
 
 from app.pipeline.gold.mart_builder import GOLD_DIR, ML_DIR
+from app.utils import storage
 from app.utils.globals import globals
 from app.utils.logger import Logger
 from app.utils.spark import SparkClient
@@ -105,7 +106,7 @@ class KModesModelPipeline:
             return -1
 
         self.logger.info("Leyendo ml_feat_kmodes_trips")
-        df = spark.read.parquet(str(feature_store_dir))
+        df = spark.read.parquet(storage.for_spark(feature_store_dir))
 
         available = set(df.columns)
         all_features = (
@@ -328,7 +329,7 @@ class KModesModelPipeline:
         out_labels_dir = KMODELS_DIR / f"labels_service_id={service_id}"
         n_labeled = len(pdf_labeled)
         spark_labels = spark.createDataFrame(pdf_labeled, schema=LABEL_SCHEMA)
-        spark_labels.write.mode("overwrite").parquet(str(out_labels_dir))
+        spark_labels.write.mode("overwrite").parquet(storage.for_spark(out_labels_dir))
         self.logger.info(f"  Labels escritas: {n_labeled} viajes")
 
         # --- Serializar modelo -------------------------------------------
@@ -360,7 +361,8 @@ class KModesModelPipeline:
         # joblib serializa el objeto KModes completo (centroids + params)
         import joblib
 
-        joblib.dump(km, model_dir / "model.joblib")
+        with storage.open_writable(model_dir / "model.joblib") as f:
+            joblib.dump(km, f)
 
         self.logger.info(
             f"  Modelo guardado en {model_dir} | k={best_k} | silhouette={best_sil:.4f}"

@@ -68,6 +68,36 @@ Python 3.12, managed with **uv** (`uv.lock`). Key split to keep in mind:
 - **pyarrow** — parquet metadata (row counts, footer validation) in the download client.
 - **scikit-learn / kmodes / statsmodels / joblib** — the `--gold-ml` model pipelines (pandas-side, not Spark).
 
+## Storage backend (local filesystem or S3)
+
+Every layer (`bronze/silver/gold/profiling` + the 3 `audit.parquet`) can live on the local
+filesystem (default) or on S3, toggled by **`STORAGE_BACKEND`** (`.env`, see `.env.example`) — no
+per-layer mixing, no code duplicated between backends. The abstraction is intentionally thin:
+
+- **`app/utils/storage.py`** — `get_root()` returns either the local project `Path` or an
+  `S3Path` (a minimal Path-like wrapper: `/`, `str()`, `.exists()`, `.mkdir()` (no-op — S3 has no
+  real directories), `.stat()`, `.glob()`, `.open()`/`.write_text()`/`.read_text()`, all via `s3fs`
+  reading `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_REGION` from the environment — **never**
+  from `config.yaml`). `app/utils/globals.py`'s `project_root` property routes through this, so the
+  existing `globals.project_root / "data/silver/stage" / category`-style composition used
+  throughout `silver.py`/`star.py`/`mart_builder.py`/`gold_pipeline.py` keeps working unchanged for
+  both backends — only the root changes, not the call sites.
+- **`storage.for_spark(path)`** — Spark/hadoop-aws needs the `s3a://` scheme; Polars/pyarrow/pandas/
+  s3fs need `s3://`. Every `spark.read.parquet(...)`/`...write...parquet(...)` call site wraps its
+  path with this helper; Polars/pandas parquet calls pass the path through `str()` unchanged (already
+  the right scheme). Local backend: `for_spark()` is a no-op (`str(path)`), so behavior is byte-identical
+  to before this abstraction existed.
+- **`storage.parquet_footer_readable()` / `.parquet_file()` / `.open_writable()`** — used by
+  `DownloadClient` for idempotency (footer-readable check) and chunked streaming writes without
+  buffering the whole file in memory, on either backend.
+- Installing S3 support: `uv sync --extra s3` (adds `s3fs`; Spark's S3 access instead comes from
+  `spark.jars.packages` — `hadoop-aws` + `aws-java-sdk-bundle`, added by `SparkClient` only when
+  `STORAGE_BACKEND=s3` — verify the exact `hadoop-aws` version against the Hadoop bundled by your
+  PySpark version before relying on it in production).
+- **`spark.local.dir` (shuffle/spill) always stays on local disk**, even with `STORAGE_BACKEND=s3`:
+  shuffle/spill through S3 would add network latency on top of an already-tight 6g heap — not
+  something to change without deliberately re-testing memory behavior.
+
 ## Architecture
 
 ### Stages (`main.py` dispatches each)
@@ -181,7 +211,64 @@ Python 3.12, managed with **uv** (`uv.lock`). Key split to keep in mind:
   sets `spark.sql.sources.partitionOverwriteMode=dynamic` for idempotent per-partition writes. On **Windows**,
   requires `HADOOP_HOME` pointing to a Hadoop bin dir containing `hadoop.dll`/`winutils` (not bundled in the
   repo); native lib path is passed via `extraLibraryPath` (not `java.library.path`, which strips Windows
-  backslashes).
+  backslashes). This Windows-only branch is a no-op inside the Linux Docker image (see below) — `HADOOP_HOME`
+  is simply unset there. When `STORAGE_BACKEND=s3`, `SparkClient` additionally adds `spark.jars.packages`
+  (hadoop-aws + aws-sdk-bundle) and s3a credentials/region config — see "Storage backend" above.
+
+## Docker / Airflow execution mode
+
+Running the pipeline no longer requires a bare local `uv run` — it can also run orchestrated via
+**Airflow on Docker Compose** (`docker-compose.yml` + `Dockerfile`), while `uv run main.py ...`
+keeps working exactly as before for anyone not using Docker/S3 (`STORAGE_BACKEND=local` is the
+default with no `.env` present).
+
+- **`Dockerfile`** — extends `apache/airflow:2.10.5-python3.12` with JDK 17 (required by PySpark
+  4.x) and a standalone `uv` binary. Project dependencies install into their **own venv**
+  (`uv sync --frozen --extra s3 --extra jupyter`) inside the image, independent of Airflow's own
+  Python environment — DAG tasks just shell out `cd /opt/airflow/project && uv run main.py ...`, so
+  nothing about the CLI itself changes.
+- **`docker-compose.yml`** — Postgres (metadata DB) + `airflow-webserver` + `airflow-scheduler` on
+  **`LocalExecutor`** (single worker, no Celery/Redis — deliberately simple for this project's
+  scale) + an optional **`jupyter`** service (same image, `jupyter lab`) for running
+  `notebooks/revision_01..05*` and the exploratory notebooks as living documentation against the
+  same data (local or S3) the DAGs just produced. Spark runs **embedded in the task's own process**
+  inside the Airflow container — no separate Spark cluster container, on purpose.
+- **`dags/dag_01_bronze.py` … `dag_07_gold_ml.py`** — each pipeline phase is its **own DAG**
+  (not one DAG with many internal tasks), chained via `TriggerDagRunOperator(wait_for_completion=True)`:
+  `dag_01_bronze → dag_02_silver_quality → dag_03_silver_schema → dag_04_silver_load → dag_05_gold
+  → dag_06_profiling`. This mirrors `run_full_pipeline()` in `main.py` — **profiling runs last on
+  purpose** (read-only documentation that doesn't feed silver/gold), not first as an earlier draft
+  of this refactor's brief assumed. `dag_07_gold_ml` (kmodes/isolation/sarimax) is a separate DAG,
+  triggered manually from the Airflow UI (training is heavy — not wanted on every batch run), with
+  its three tasks chained sequentially rather than parallel: each spins up its own `SparkClient`/
+  pandas process and the container's 6g heap is already committed by one training run at a time.
+  All DAG tasks are thin `BashOperator`s invoking the existing CLI — none reimplement pipeline logic.
+- **`.env`** (from `.env.example`, gitignored) — `STORAGE_BACKEND`/AWS credentials/`S3_BUCKET`/
+  `S3_PREFIX` plus standard Airflow bootstrap vars (`AIRFLOW_UID`, `AIRFLOW__CORE__EXECUTOR`,
+  `AIRFLOW__DATABASE__SQL_ALCHEMY_CONN`, `_AIRFLOW_WWW_USER_USERNAME`/`PASSWORD`). Bring up with
+  `docker compose up airflow-init` once, then `docker compose up`.
+
+**Operational notes (Windows / Docker Desktop):**
+
+- **Run `uv lock` once (and commit `uv.lock`) before `docker compose build`** — the `s3`/`jupyter`
+  extras were added to `pyproject.toml` and `uv sync --frozen` fails loudly on a stale lockfile.
+- **Memory**: `SparkClient` demands `driver.memory=6g` — the Docker VM (WSL2 backend) needs
+  **≥8 GB**. If the default (50% of host RAM) is too low, raise it in `%UserProfile%\.wslconfig`
+  (`[wsl2]` → `memory=10GB`). Do NOT lower the Spark heap to fit; raise the VM. `local[6]` also
+  assumes ≥6 CPUs visible to the VM (WSL2 default: all host cores).
+- **`SPARK_LOCAL_DIR=/tmp/spark-temp`** (set in `docker-compose.yml`) — inside the container the
+  shuffle/spill goes to container-local disk, NOT the `./data` bind mount: Windows bind mounts go
+  through gRPC-FUSE and 5–15 GB of shuffle I/O over them is punishing. Outside Docker the variable
+  is unset and behavior is unchanged (`data/.spark_temp`). Shuffle never goes to S3 either way.
+- **Unpause the DAGs**: `AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=true`, and the
+  `TriggerDagRunOperator` chain (`wait_for_completion=True`) will sit queued forever if a
+  downstream DAG is paused — unpause all 7 (`dag_01`…`dag_07`) in the UI before triggering
+  `dag_01_bronze`.
+- **`.dockerignore` matters**: it keeps `data/` (huge), `.venv/` (Windows binaries would clobber
+  the image's Linux venv) and **`.env` (AWS secrets)** out of the build context/image. Don't
+  remove entries from it.
+- `HADOOP_HOME`/`winutils` is only needed for **bare-Windows** runs (`uv run main.py` outside
+  Docker); inside the Linux container that branch is inert.
 
 - **Notebooks** (`notebooks/revision_01..05`) — per-layer review notebooks (bronze inventory, profiling
   results, silver integrity `bronze = stage + reject`, gold grains + no-loss proof `SUM(viajes) == fact rows`,

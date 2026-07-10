@@ -34,6 +34,7 @@ from app.pipeline.gold.ml.arima_features import ArimaFeatures
 from app.pipeline.gold.ml.isolation_fraud_features import IsolationFraudFeatures
 from app.pipeline.gold.ml.kmodes_features import KModesFeatures
 from app.schemas.settings_schema import DatasetsConfig, Module, SettingsSchema
+from app.utils import storage
 from app.utils.globals import globals
 from app.utils.logger import Logger
 from app.utils.spark import SparkClient
@@ -152,7 +153,7 @@ class GoldPipeline:
             self.logger.warning("No se encontró audit de silver, usando 'unknown'")
             return "unknown"
         try:
-            df = spark.read.parquet(str(audit_path))
+            df = spark.read.parquet(storage.for_spark(audit_path))
             latest = (
                 df.orderBy(F.col("start_timestamp").desc()).select("audit_id").first()
             )

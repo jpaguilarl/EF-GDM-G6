@@ -31,6 +31,7 @@ from statsmodels.tsa.statespace.sarimax import SARIMAX
 
 from app.pipeline.gold.dims.gold_dimensions import HOLIDAY_DATE_KEYS
 from app.pipeline.gold.mart_builder import GOLD_DIR, ML_DIR
+from app.utils import storage
 from app.utils.logger import Logger
 from app.utils.spark import SparkClient
 
@@ -218,7 +219,8 @@ def _train_and_score_segment(
     model_dir = MODELS_DIR / f"{_fs_safe(borough)}__{_fs_safe(service_id)}"
     model_dir.mkdir(parents=True, exist_ok=True)
     result.remove_data()
-    result.save(str(model_dir / "model.pkl"), remove_data=True)
+    with storage.open_writable(model_dir / "model.pkl") as f:
+        result.save(f, remove_data=True)
 
     with (model_dir / "metadata.json").open("w") as f:
         json.dump(
@@ -268,7 +270,7 @@ class SariMaxModelPipeline:
             return -1
 
         self.logger.info("Leyendo ml_feat_arima_trips")
-        df = spark.read.parquet(str(feature_store_dir))
+        df = spark.read.parquet(storage.for_spark(feature_store_dir))
 
         cols_needed = ["borough", "service_id", "pickup_hour", "trip_count"]
         available = [c for c in cols_needed if c in df.columns]

@@ -31,6 +31,7 @@ from pyspark.sql.types import (
 from sklearn.ensemble import IsolationForest
 
 from app.pipeline.gold.mart_builder import GOLD_DIR, ML_DIR
+from app.utils import storage
 from app.utils.globals import globals
 from app.utils.logger import Logger
 from app.utils.spark import SparkClient
@@ -108,7 +109,7 @@ class IsolationForestModelPipeline:
             return -1
 
         self.logger.info("Leyendo ml_feat_isolation_fraud")
-        df = spark.read.parquet(str(feature_store_dir))
+        df = spark.read.parquet(storage.for_spark(feature_store_dir))
 
         cols_needed = IDENTIFIER_COLS + FEATURE_COLS
         available = [c for c in cols_needed if c in df.columns]
@@ -172,7 +173,8 @@ class IsolationForestModelPipeline:
 
             model_dir = MODELS_DIR / str(rc)
             model_dir.mkdir(parents=True, exist_ok=True)
-            joblib.dump(model, model_dir / "model.joblib")
+            with storage.open_writable(model_dir / "model.joblib") as f:
+                joblib.dump(model, f)
             with (model_dir / "metadata.json").open("w") as f:
                 json.dump(
                     {
@@ -200,10 +202,10 @@ class IsolationForestModelPipeline:
             n_scored = len(out)
             total_scored += n_scored
 
-            temp_path = str(SCORES_DIR / f"_tmp_{rc}")
+            temp_path = storage.for_spark(SCORES_DIR / f"_tmp_{rc}")
             spark.createDataFrame(out).coalesce(1).write.mode("overwrite").parquet(temp_path)
 
-            final_path = str(SCORES_DIR / f"ratecode_id={rc}")
+            final_path = storage.for_spark(SCORES_DIR / f"ratecode_id={rc}")
             spark.read.parquet(temp_path).write.mode("overwrite").parquet(final_path)
 
             self.logger.info(f"  Modelo guardado: RatecodeID={rc} | {n_scored:,} scores escritos")
