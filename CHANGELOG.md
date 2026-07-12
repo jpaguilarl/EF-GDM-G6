@@ -5,6 +5,17 @@ Formato orientado al usuario (equipos de analítica / BI / ML).
 
 ---
 
+## [0.4.1] — 2026-07-10 — Resiliencia OOM y dependencias en Docker
+
+### 🐛 Correcciones
+- **Prevención de OutOfMemory (OOM) en Spark**: El procesamiento paralelo estático (`MAX_PARALLEL_*`) provocaba caídas completas de la JVM al procesar meses masivos como `fhvhv` y `yellow` simultáneamente. Se implementó **concurrencia dinámica** en `SilverPipeline`, `ProfilingPipeline` y `StarSchemaBuilder`: los datasets pesados se procesan secuencialmente (1 worker) para proteger la RAM de 6GB, mientras que los livianos (`green`, `fhv`) se solapan en paralelo (2-3 workers).
+- **Corrupción de caché Ivy eliminada**: Las dependencias Maven (`hadoop-aws`, `aws-java-sdk-bundle`) ahora se **pre-descargan** en la imagen de Docker durante el build mediante una sesión fantasma de PySpark (`Dockerfile`). Los DAGs en runtime ya no dependen de internet, eliminando fallos de red por descargas concurrentes (`[Errno 111] Connection refused`).
+
+### 🔧 Mejoras
+- **Logs de Airflow limpios**: Se deshabilitó la barra de progreso por consola nativa de PySpark (`spark.ui.showConsoleProgress = false`) para evitar ruido innecesario de los *stages* en la salida estándar, manteniendo únicamente el sistema de logging propio.
+
+---
+
 ## [0.4.0] — 2026-07-02 — Histórico multi-año, modelos ML integrados y pipeline reanudable
 
 El pipeline pasa de procesar un año a **todo el histórico 2023–2025** (~940M de viajes).

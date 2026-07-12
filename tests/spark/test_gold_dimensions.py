@@ -13,8 +13,8 @@ from pyspark.sql.types import (
 )
 
 from app.pipeline.gold import mart_builder
-from app.pipeline.gold.dims import gold_dimensions as gd_module
-from app.pipeline.gold.dims.gold_dimensions import GoldDimensionsBuilder
+from app.pipeline.gold_impl.dims import gold_dimensions as gd_module
+from app.pipeline.gold_impl.dims.gold_dimensions import GoldDimensionsBuilder
 
 
 @pytest.fixture

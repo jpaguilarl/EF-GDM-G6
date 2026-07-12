@@ -8,9 +8,9 @@ tratarse como categorias nominales.
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 
-from app.pipeline.gold.feature_rules import passenger_groups as pg
-from app.pipeline.gold.feature_rules import time_blocks as tb
-from app.pipeline.gold.mart_builder import (
+from app.pipeline.gold_impl.feature_rules import passenger_groups as pg
+from app.pipeline.gold_impl.feature_rules import time_blocks as tb
+from app.pipeline.gold_impl.mart_builder import (
     DO_LOC,
     PU_LOC,
     SILVER_DIMS_DIR,
@@ -19,6 +19,7 @@ from app.pipeline.gold.mart_builder import (
     col_or_null,
     with_zone,
 )
+from app.utils import storage
 
 
 class KModesFeatures(TripGrainMart):
@@ -73,13 +74,13 @@ class KModesFeatures(TripGrainMart):
             base_cols["passenger_group"] = F.lit(None).cast("string")
         else:
             payment_type = ctx.spark.read.parquet(
-                str(SILVER_DIMS_DIR / "dim_payment_type.parquet")
+                storage.for_spark(SILVER_DIMS_DIR / "dim_payment_type.parquet")
             ).select(
                 F.col("payment_type_id").alias("_pt_id"),
                 F.col("payment_type_name"),
             )
             ratecode = ctx.spark.read.parquet(
-                str(SILVER_DIMS_DIR / "dim_ratecode.parquet")
+                storage.for_spark(SILVER_DIMS_DIR / "dim_ratecode.parquet")
             ).select(
                 F.col("ratecode_id").alias("_rc_id"),
                 F.col("ratecode_name"),

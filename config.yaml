@@ -1,3 +1,6 @@
+storage:
+  backend: "local"
+
 datasets:
   years: [2023, 2024, 2025]
 

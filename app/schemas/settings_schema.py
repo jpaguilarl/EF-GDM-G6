@@ -1,4 +1,22 @@
+from typing import Any, Literal
+
 from pydantic import BaseModel, Field
+
+
+class ProfilingRules(BaseModel):
+    nullability: dict[str, list[str]] | None = None
+    reasonableness_ranges: dict[str, dict[str, list[float]]] | None = None
+    amount_formulas: dict[str, dict[str, Any]] | None = None
+    max_trip_duration_minutes: int | None = None
+    amount_tolerance: float | None = None
+
+
+class ProfilingConfig(BaseModel):
+    rules: ProfilingRules = Field(default_factory=ProfilingRules)
+
+
+class StorageConfig(BaseModel):
+    backend: Literal["local", "s3"] = "local"
 
 
 class Module(BaseModel):
@@ -62,5 +80,7 @@ class GoldConfig(BaseModel):
 
 
 class SettingsSchema(BaseModel):
+    storage: StorageConfig
     datasets: DatasetsConfig
     gold: GoldConfig = Field(default_factory=GoldConfig)
+    profiling: ProfilingConfig = Field(default_factory=ProfilingConfig)

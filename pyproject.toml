@@ -19,6 +19,21 @@ dependencies = [
     "statsmodels>=0.14.0",
 ]
 
+[project.optional-dependencies]
+# STORAGE_BACKEND=s3: s3fs (fsspec) es el cliente que usan app/utils/storage.py
+# (S3Path), pandas.to_parquet/read_parquet y Polars para rutas s3://. Spark usa
+# su propio conector hadoop-aws (via spark.jars.packages en SparkClient), no
+# depende de este extra. Instalar con: uv sync --extra s3
+s3 = [
+    "s3fs>=2024.10.0",
+]
+# Servicio jupyter del docker-compose: notebooks/revision_*.ipynb como
+# documentacion viva. ipykernel (arriba) ya cubre el kernel; jupyterlab es el
+# servidor/UI. Instalar con: uv sync --extra jupyter
+jupyter = [
+    "jupyterlab>=4.2.0",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"

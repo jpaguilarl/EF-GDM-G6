@@ -14,25 +14,45 @@ def test_no_unexpected_categories():
 
 def test_yellow_nullable():
     nc = NULLABLE_COLUMNS["yellow"]
-    assert "airport_fee" in nc
-    assert "congestion_surcharge" in nc
-    assert "cbd_congestion_fee" in nc  # peaje CBD MTA (2025+)
-    assert len(nc) == 3
+    expected = {
+        "RatecodeID",
+        "store_and_fwd_flag",
+        "payment_type",
+        "tip_amount",
+        "tolls_amount",
+        "extra",
+        "mta_tax",
+        "improvement_surcharge",
+        "congestion_surcharge",
+        "airport_fee",
+        "cbd_congestion_fee",
+    }
+    assert nc == expected
 
 
 def test_green_nullable():
     nc = NULLABLE_COLUMNS["green"]
-    assert "ehail_fee" in nc
-    assert "congestion_surcharge" in nc
-    assert "cbd_congestion_fee" in nc  # peaje CBD MTA (2025+)
-    assert "airport_fee" not in nc
-    assert len(nc) == 3
+    expected = {
+        "RatecodeID",
+        "store_and_fwd_flag",
+        "payment_type",
+        "tip_amount",
+        "tolls_amount",
+        "extra",
+        "mta_tax",
+        "ehail_fee",
+        "improvement_surcharge",
+        "congestion_surcharge",
+        "cbd_congestion_fee",
+        "trip_type",
+    }
+    assert nc == expected
 
 
 def test_fhv_nullable():
     nc = NULLABLE_COLUMNS["fhv"]
-    assert "SR_Flag" in nc
-    assert len(nc) == 1
+    expected = {"SR_Flag", "Affiliated_base_number"}
+    assert nc == expected
 
 
 def test_fhvhv_nullable():
@@ -40,11 +60,18 @@ def test_fhvhv_nullable():
     expected = {
         "originating_base_num",
         "on_scene_datetime",
+        "request_datetime",
         "shared_request_flag",
         "shared_match_flag",
         "access_a_ride_flag",
         "wav_request_flag",
         "wav_match_flag",
+        "tolls",
+        "bcf",
+        "sales_tax",
+        "congestion_surcharge",
+        "airport_fee",
+        "cbd_congestion_fee",
+        "tips",
     }
     assert nc == expected
-    assert len(nc) == 7

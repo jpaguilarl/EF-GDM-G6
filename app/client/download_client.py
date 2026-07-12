@@ -5,9 +5,9 @@ from pathlib import Path
 
 import httpx
 import polars as pl
-import pyarrow.parquet as pq
 
 from app.utils.logger import Logger
+from app.utils import storage
 
 
 class DownloadClient:
@@ -26,7 +26,13 @@ class DownloadClient:
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=httpx.Timeout(300.0))
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(300.0),
+                limits=httpx.Limits(
+                    max_connections=16,
+                    max_keepalive_connections=10,
+                ),
+            )
         return self._client
 
     async def close(self) -> None:
@@ -50,31 +56,35 @@ class DownloadClient:
         self.logger.info(f"Iniciando descarga de datos de viajes: {url}")
         self.logger.info(f"Marca de tiempo de inicio: {start_ts.isoformat()}")
 
-        file_path = Path(path or f"data/bronze/{category}/{year}-{month:02d}.parquet")
+        file_path = (
+            Path(path) if path else storage.data_path("bronze", category, f"{year}-{month:02d}.parquet")
+        )
 
         # Idempotencia: si el archivo ya existe y es un parquet legible (footer
         # valido), no re-descargar. Un archivo truncado por una descarga
         # interrumpida falla la lectura del footer y se re-descarga.
         if file_path.exists():
-            try:
-                pq.ParquetFile(file_path)
+            if storage.parquet_footer_readable(file_path):
                 self.logger.info(f"Ya descargado, se omite: {file_path}")
                 return
-            except Exception:
-                self.logger.warning(
-                    f"Archivo existente ilegible, se re-descarga: {file_path}"
-                )
+            self.logger.warning(
+                f"Archivo existente ilegible, se re-descarga: {file_path}"
+            )
 
         try:
             client = await self._get_client()
-            file_path.parent.mkdir(parents=True, exist_ok=True)
-            # Streaming por chunks de 1 MiB: nunca se mantiene el parquet completo
-            # en memoria (response.content lo cargaria entero en RAM).
+            # Streaming por chunks de 4 MiB. Los writes van a
+            # asyncio.to_thread: s3fs flush (multipart upload cada ~5 MB)
+            # es bloqueante y congelaria el event loop impidiendo que las
+            # demas descargas concurrentes avancen.
             async with client.stream("GET", url) as response:
                 response.raise_for_status()
-                with open(file_path, "wb") as f:
-                    async for chunk in response.aiter_bytes(chunk_size=1024 * 1024):
-                        f.write(chunk)
+                f = storage.open_writable(file_path)
+                try:
+                    async for chunk in response.aiter_bytes(chunk_size=4 * 1024 * 1024):
+                        await asyncio.to_thread(f.write, chunk)
+                finally:
+                    await asyncio.to_thread(f.close)
         except httpx.HTTPStatusError as e:
             self.logger.error(f"Error HTTP {e.response.status_code} al descargar {url}")
             return
@@ -83,7 +93,7 @@ class DownloadClient:
             return
 
         try:
-            pf = pq.ParquetFile(file_path)
+            pf = storage.parquet_file(file_path)
             rowcount = pf.metadata.num_rows
             bytecount = file_path.stat().st_size
             source_file = str(file_path)
@@ -123,11 +133,13 @@ class DownloadClient:
             df = pl.read_csv(io.StringIO(response.text))
             rowcount = len(df)
 
-            file_path = Path(
-                path or "data/bronze/zone-lookup/zone-lookup-table.parquet"
+            file_path = (
+                Path(path)
+                if path
+                else storage.data_path("bronze", "zone-lookup", "zone-lookup-table.parquet")
             )
             file_path.parent.mkdir(parents=True, exist_ok=True)
-            df.write_parquet(file_path)
+            df.write_parquet(str(file_path))
 
             bytecount = file_path.stat().st_size
             source_file = str(file_path)
@@ -155,7 +167,7 @@ class DownloadClient:
         bytecount: int | None = None,
     ) -> None:
         async with self._audit_lock:
-            audit_path = Path("data/bronze/audit.parquet")
+            audit_path = storage.data_path("bronze", "audit.parquet")
             audit_path.parent.mkdir(parents=True, exist_ok=True)
 
             start_str = start_ts.isoformat()
@@ -180,11 +192,11 @@ class DownloadClient:
                 ]
             )
             if audit_path.exists():
-                df_existing = pl.read_parquet(audit_path)
+                df_existing = pl.read_parquet(str(audit_path))
                 df = pl.concat([df_existing, df_new])
             else:
                 df = df_new
-            df.write_parquet(audit_path)
+            df.write_parquet(str(audit_path))
 
     async def __aenter__(self) -> "DownloadClient":
         return self

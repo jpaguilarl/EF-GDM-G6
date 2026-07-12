@@ -17,23 +17,24 @@ from datetime import datetime
 import polars as pl
 from pyspark.sql import functions as F
 
-from app.pipeline.gold.dims.gold_dimensions import GoldDimensionsBuilder
-from app.pipeline.gold.mart_builder import (
+from app.pipeline.gold_impl.dims.gold_dimensions import GoldDimensionsBuilder
+from app.pipeline.gold_impl.mart_builder import (
     FACTS_DIR,
     GOLD_DIR,
     SILVER_DIMS_DIR,
     GoldContext,
 )
-from app.pipeline.gold.marts.abc_xyz_zones import AbcXyzZonesMart
-from app.pipeline.gold.marts.demand_volume import DemandVolumeMart
-from app.pipeline.gold.marts.financial_performance import FinancialPerformanceMart
-from app.pipeline.gold.marts.operational_profile import OperationalProfileMart
-from app.pipeline.gold.marts.supply_demand_balance import SupplyDemandBalanceMart
-from app.pipeline.gold.marts.tipping_behavior import TippingBehaviorMart
-from app.pipeline.gold.ml.arima_features import ArimaFeatures
-from app.pipeline.gold.ml.isolation_fraud_features import IsolationFraudFeatures
-from app.pipeline.gold.ml.kmodes_features import KModesFeatures
+from app.pipeline.gold_impl.marts.abc_xyz_zones import AbcXyzZonesMart
+from app.pipeline.gold_impl.marts.demand_volume import DemandVolumeMart
+from app.pipeline.gold_impl.marts.financial_performance import FinancialPerformanceMart
+from app.pipeline.gold_impl.marts.operational_profile import OperationalProfileMart
+from app.pipeline.gold_impl.marts.supply_demand_balance import SupplyDemandBalanceMart
+from app.pipeline.gold_impl.marts.tipping_behavior import TippingBehaviorMart
+from app.pipeline.gold_impl.ml.arima_features import ArimaFeatures
+from app.pipeline.gold_impl.ml.isolation_fraud_features import IsolationFraudFeatures
+from app.pipeline.gold_impl.ml.kmodes_features import KModesFeatures
 from app.schemas.settings_schema import DatasetsConfig, Module, SettingsSchema
+from app.utils import storage
 from app.utils.globals import globals
 from app.utils.logger import Logger
 from app.utils.spark import SparkClient
@@ -152,7 +153,7 @@ class GoldPipeline:
             self.logger.warning("No se encontró audit de silver, usando 'unknown'")
             return "unknown"
         try:
-            df = spark.read.parquet(str(audit_path))
+            df = spark.read.parquet(storage.for_spark(audit_path))
             latest = (
                 df.orderBy(F.col("start_timestamp").desc()).select("audit_id").first()
             )

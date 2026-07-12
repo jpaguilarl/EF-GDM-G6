@@ -9,7 +9,7 @@ from pyspark.sql import Window
 from pyspark.sql import functions as F
 from pyspark.storagelevel import StorageLevel
 
-from app.pipeline.gold.mart_builder import GoldBuilder, GoldContext
+from app.pipeline.gold_impl.mart_builder import GoldBuilder, GoldContext
 
 # Columna de ingresos por categoria. La normalizacion real a `revenue` la hace
 # GoldContext.get_union_facts() (UNION_REVENUE_COL); aqui solo define QUE

@@ -11,13 +11,14 @@ from app.profiling.dataset_profiler import DatasetProfiler
 from app.profiling.reporter import Reporter
 from app.profiling.schemas.profiling_schema import ProfilingReport
 from app.schemas.settings_schema import DatasetsConfig, Module
+from app.utils import storage
 from app.utils.globals import globals
 from app.utils.logger import Logger
 from app.utils.spark import SparkClient
 
 
 class ProfilingPipeline:
-    def __init__(self, output_dir: str = "data/profiling") -> None:
+    def __init__(self, output_dir: str | Path | None = None) -> None:
         self.logger = Logger()
         self.spark = SparkClient()
         self.profiler = DatasetProfiler(self.spark)
@@ -48,21 +49,36 @@ class ProfilingPipeline:
                 for m in range(1, 13):
                     tasks.append((year.category, year.year, m))
 
+        heavy_cats = {"fhvhv", "yellow"}
+        heavy_tasks = [t for t in tasks if t[0] in heavy_cats]
+        light_tasks = [t for t in tasks if t[0] not in heavy_cats]
+
         # NO llamar catalog.clearCache() entre perfiles: es global y
         # despersistiria los df cacheados de los perfiles concurrentes. Cada
         # perfil ya libera su propio cache (unpersist en DatasetProfiler).
         all_reports: list[ProfilingReport] = []
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=self.MAX_PARALLEL_PROFILES
-        ) as executor:
-            futures = [
-                executor.submit(self._profile_one, cat, y, m)
-                for (cat, y, m) in tasks
-            ]
-            for future in concurrent.futures.as_completed(futures):
-                report = future.result()
-                if report:
-                    all_reports.append(report)
+
+        def _run_pool(pool_tasks: list[tuple[str, int, int]], max_w: int) -> None:
+            if not pool_tasks:
+                return
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
+                futures = [
+                    executor.submit(self._profile_one, cat, y, m)
+                    for (cat, y, m) in pool_tasks
+                ]
+                for future in concurrent.futures.as_completed(futures):
+                    report = future.result()
+                    if report:
+                        all_reports.append(report)
+
+        if heavy_tasks:
+            self.logger.info("Perfilando datasets pesados (fhvhv, yellow) secuencialmente")
+            _run_pool(heavy_tasks, 1)
+
+        if light_tasks:
+            self.logger.info("Perfilando datasets livianos (green, fhv) en paralelo")
+            _run_pool(light_tasks, 3)
+
         gc.collect()
 
         # as_completed devuelve en orden de finalizacion; ordenar para que el
@@ -82,7 +98,7 @@ class ProfilingPipeline:
     def _profile_one(
         self, category: str, year: int, month: int
     ) -> ProfilingReport | None:
-        file_path = Path(f"data/bronze/{category}/{year}-{month:02d}.parquet")
+        file_path = storage.data_path("bronze", category, f"{year}-{month:02d}.parquet")
 
         if not file_path.exists():
             self.logger.warning(f"Dataset no encontrado, se omite: {file_path}")
@@ -131,14 +147,14 @@ class ProfilingPipeline:
             return None
 
     def _load_zone_lookup(self) -> None:
-        zone_path = Path("data/bronze/zone-lookup/zone-lookup-table.parquet")
+        zone_path = storage.data_path("bronze", "zone-lookup", "zone-lookup-table.parquet")
         if not zone_path.exists():
             self.logger.warning(
                 "Tabla de zonas no encontrada, integridad referencial omitida"
             )
             return
 
-        df = self.spark.get_session().read.parquet(str(zone_path))
+        df = self.spark.get_session().read.parquet(storage.for_spark(zone_path))
         ids = (
             df.filter(F.col("LocationID").isNotNull())
             .select("LocationID")
@@ -149,7 +165,7 @@ class ProfilingPipeline:
         self.logger.info(f"Zonas cargadas: {len(self.zone_ids)} LocationIDs validos")
 
     def _load_data_dictionaries(self) -> None:
-        dict_dir = Path("data/bronze/dicts")
+        dict_dir = storage.data_path("bronze", "dicts")
         if not dict_dir.exists():
             self.logger.warning("Directorio de diccionarios no encontrado")
             return
@@ -158,7 +174,7 @@ class ProfilingPipeline:
             dict_path = dict_dir / f"data_dictionary_trip_records_{cat}.parquet"
             if dict_path.exists():
                 self.dicts[cat] = self.spark.get_session().read.parquet(
-                    str(dict_path)
+                    storage.for_spark(dict_path)
                 )
                 count = self.dicts[cat].count()
                 self.logger.info(

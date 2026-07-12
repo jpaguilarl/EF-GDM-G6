@@ -1,0 +1,14 @@
+# Nunca al build context: datos (GBs), secretos, y artefactos de la maquina host.
+# CRITICO: .env contiene credenciales AWS — jamas debe hornearse en la imagen.
+.env
+data/
+logs/
+airflow-logs/
+.venv/
+.git/
+.claude/
+lib/
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/

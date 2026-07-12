@@ -5,6 +5,8 @@ from pathlib import Path
 
 from pyspark.sql import SparkSession
 
+from app.utils import storage
+
 # Spark lanza un proceso de Python por cada worker. Sin esto usa "python3" por
 # defecto, que en Windows no existe (es python.exe) y falla con
 # "CreateProcess error=5, Acceso denegado". Apuntamos al interprete actual
@@ -24,26 +26,42 @@ class SparkClient:
 
         hadoop_bin = str(Path(os.environ.get("HADOOP_HOME", "")) / "bin")
 
-        # Shuffle/spill en el disco del proyecto (H:), no en /tmp ni en C:. El
-        # /tmp puede tener cuota pequena, y C: (SSD del sistema) no tiene espacio
-        # de sobra en esta maquina — el shuffle puede crecer a ~5-15GB. H: es un
-        # HDD mas lento para shuffle, pero tiene ~365GB libres.
-        local_dir = str(Path(__file__).resolve().parent.parent.parent / "data" / ".spark_temp")
+        # Recursos calibrados para esta maquina (Intel Ultra 9 285H: 16C/16T,
+        # 32GB RAM, NVMe unico en C: con ~726GB libres). Configurables por env
+        # para que Docker/WSL (VM mas chica) pueda bajarlos sin tocar codigo —
+        # mismo patron que SPARK_LOCAL_DIR (abajo). Defaults = perfil Balanceado.
+        driver_memory = os.environ.get("SPARK_DRIVER_MEMORY", "10g")
+        master_cores = os.environ.get("SPARK_MASTER_CORES", "10")
+
+        # Shuffle/spill en el disco del proyecto. En esta maquina data/ vive en el
+        # NVMe de C: (rapido para shuffle, que puede crecer a ~5-15GB); ~726GB
+        # libres, sin problema de cuota como tendria /tmp.
+        # SPARK_LOCAL_DIR (env) permite override SOLO para Docker: dentro del
+        # contenedor, data/ es un bind mount de Windows (I/O lenta via gRPC-FUSE)
+        # y el shuffle debe ir a disco del contenedor (p.ej. /tmp/spark-temp, lo
+        # fija docker-compose.yml). Sin la variable, comportamiento identico al
+        # de siempre. El shuffle NUNCA va a S3, sea cual sea el backend.
+        local_dir = os.environ.get("SPARK_LOCAL_DIR") or str(
+            Path(__file__).resolve().parent.parent.parent / "data" / ".spark_temp"
+        )
         os.makedirs(local_dir, exist_ok=True)
 
-        self.spark = (
+        builder = (
             SparkSession.builder.appName("Analisis_Presupuesto_MEF")
-            # 6 de los 12 cores logicos. El default local[*] (12 tareas en el mismo
-            # heap de 6g) provoca OutOfMemoryError con datasets grandes (fhvhv ~20M
-            # filas: cada tarea de escaneo usa ~0.6-1GB en buffers de descompresion).
-            # 4 dejaba CPU ociosa en las fases CPU-bound (zstd, xxhash, parsing);
-            # 6 es el techo seguro con 6g de heap — no subir sin subir el heap.
-            .master("local[6]")
-            # 6g de heap: hay ~8GB libres y las window functions de silver sobre 20M
-            # filas necesitan margen. En local mode driver y executor son la MISMA JVM,
-            # asi que spark.executor.memory se ignora; solo cuenta driver.memory.
-            .config("spark.driver.memory", "6g")
-            .config("spark.executor.memory", "6g")
+            # 10 de los 16 cores logicos (default; override via SPARK_MASTER_CORES).
+            # El default local[*] (16 tareas en el mismo heap) provoca OutOfMemoryError
+            # con datasets grandes (fhvhv ~20M filas: cada tarea de escaneo usa
+            # ~0.6-1GB en buffers de descompresion). local[10] con heap de 10g es el
+            # techo seguro: deja 6 hilos y ~22GB para el OS, los workers de Python de
+            # PySpark y las etapas ML (pandas/sklearn/statsmodels, que corren en
+            # proceso aparte). No subir cores sin subir el heap en la misma proporcion.
+            .master(f"local[{master_cores}]")
+            # 10g de heap (default; override via SPARK_DRIVER_MEMORY): 32GB totales dan
+            # margen amplio para las window functions de silver sobre 20M filas sin
+            # arriesgar OOM. En local mode driver y executor son la MISMA JVM, asi que
+            # spark.executor.memory se ignora; solo cuenta driver.memory.
+            .config("spark.driver.memory", driver_memory)
+            .config("spark.executor.memory", driver_memory)
             # 128 particiones iniciales: tareas pequenas que caben en el heap y hacen
             # spill granular a disco. AQE (abajo) coalescea dinamicamente las que
             # queden pequenas, asi que 128 actua como techo para datasets grandes
@@ -68,6 +86,8 @@ class SparkClient:
             .config("spark.hadoop.parquet.compression.codec.zstd.level", "9")
             # Conversion vectorizada Arrow <-> pandas/Polars: menos copias y menos RAM.
             .config("spark.sql.execution.arrow.pyspark.enabled", "true")
+            # Ocultar barra de progreso de Spark para limpiar los logs de Airflow
+            .config("spark.ui.showConsoleProgress", "false")
             .config("spark.local.dir", local_dir)
             # Ruta de librerias nativas de Hadoop (winutils/hadoop.dll en Windows).
             # Se usa extraLibraryPath en lugar de "-Djava.library.path" dentro de
@@ -75,8 +95,32 @@ class SparkClient:
             # rutas de Windows (D:\...\bin -> D:...bin) y la JVM no carga hadoop.dll.
             .config("spark.driver.extraLibraryPath", hadoop_bin)
             .config("spark.executor.extraLibraryPath", hadoop_bin)
-            .getOrCreate()
         )
+
+        # STORAGE_BACKEND=s3: anade el conector hadoop-aws (esquema s3a) y lee
+        # credenciales de las variables de entorno AWS_* estandar — nunca de
+        # config.yaml. spark.local.dir se queda en disco local (arriba) aun con
+        # backend S3: el shuffle/spill nunca debe ir a S3 (riesgo de OOM ya
+        # documentado se agravaria con la latencia de red).
+        if storage.get_backend() == "s3":
+            builder = (
+                builder.config(
+                    "spark.jars.packages",
+                    "org.apache.hadoop:hadoop-aws:3.4.1,"
+                    "com.amazonaws:aws-java-sdk-bundle:1.12.787",
+                )
+                .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+                .config(
+                    "spark.hadoop.fs.s3a.aws.credentials.provider",
+                    "com.amazonaws.auth.EnvironmentVariableCredentialsProvider",
+                )
+                .config(
+                    "spark.hadoop.fs.s3a.endpoint.region",
+                    os.environ.get("AWS_REGION", "us-east-1"),
+                )
+            )
+
+        self.spark = builder.getOrCreate()
 
     def get_session(self):
         return self.spark

@@ -8,8 +8,8 @@ score final del modelo.
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 
-from app.pipeline.gold.feature_rules import ratecode_tariff as rt
-from app.pipeline.gold.mart_builder import (
+from app.pipeline.gold_impl.feature_rules import ratecode_tariff as rt
+from app.pipeline.gold_impl.mart_builder import (
     GoldContext,
     TripGrainMart,
     col_or_null,
