@@ -5,6 +5,28 @@ Formato orientado al usuario (equipos de analítica / BI / ML).
 
 ---
 
+## 2026-07-13 - v0.6.2
+
+Real-time SSE endpoint merges historic + live Redis data across all 6 marts; ML models (IsolationForest fraud scoring, KModes trip profiling) run as EventBus subscribers on every ingested ride.
+
+### Added
+- **SSE streaming endpoints** (`/api/v1/realtime/{demand-volume,financial-performance,operational-profile,supply-demand,tipping,abc-xyz}/stream`) — Server-Sent Events that push an initial snapshot (historic + Redis) followed by live increments via EventBus subscription; includes heartbeat keep-alive, client-side filtering (service_id, zone, borough, etc.), and automatic unsubscribe on disconnect
+- **MergedViewReader** (`app/serving/merged_view.py`) — merges Polars historic data with real-time Redis hashes from all 6 marts, deduplicating on natural keys; exposes `read_merged()` (batch) and `get_realtime_row()` (single ride)
+- **FraudScorer** (`app/speed/fraud_scorer.py`) — EventBus subscriber that computes 6 features per ride (speed, cost-per-mile, toll ratio, etc.), scores via IsolationForest per RatecodeID, and stores `anomaly_score`/`is_fraud` in Redis + publishes to `rt:fraud_events` pub/sub channel
+- **TripProfiler** (`app/speed/trip_profiler.py`) — EventBus subscriber that extracts categorical features (borough, franja_horaria, payment_type, etc.), encodes via KModes category mappings, predicts cluster_id, and stores it in Redis
+- **ModelLoader** (`app/speed/ml_state.py`) — loads IsolationForest models (per RatecodeID) and KModes models (per service) with joblib, plus KModes category mappings from JSON; hot-reloadable via admin endpoint
+- **Admin endpoint** `POST /api/v1/admin/reload-models` — re-scans `data/gold/models/` and hot-reloads all ML models into the running FastAPI process
+- **New dependency**: `sse-starlette>=2.2.0` for SSE StreamingResponse
+- **GET merged endpoints** (`/api/v1/realtime/*`) — return historic + real-time merged rows with filter/limit support
+- **Unit tests**: `test_serving_merged_view.py` (5 tests), `test_serving_sse.py` (7 tests), `test_speed_fraud_scorer.py` (7 tests), `test_speed_model_loader.py` (3 tests), `test_speed_trip_profiler.py` (5 tests)
+
+### Changed
+- `app/serving/app.py` — FastAPI lifespan wires up `RedisClient`, `EventBus`, `EventProcessor`, `FraudScorer`, `TripProfiler`, `ModelLoader`, and `MergedViewReader`; includes `ingest` and `admin` routers
+- `app/serving/routes/realtime.py` — extended from placeholder to full implementation with 6 merged endpoints + 6 SSE streaming endpoints
+- `app/speed/schema.py` — `EnrichedRide` extended with fields required by fraud scorer and trip profiler
+- `app/speed/pubsub.py` — added `unsubscribe()` method for SSE cleanup on disconnect
+- `pyproject.toml` — added `sse-starlette` serving dependency, `pytest-asyncio` asyncio_mode = auto for SSE tests
+
 ## 2026-07-13 - v0.6.1
 
 Real-time aggregation over Redis (speed view) — EventBus subscriber maintains rolling 6-mart state with 48h TTL.

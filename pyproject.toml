@@ -41,6 +41,7 @@ serving = [
     "uvicorn[standard]>=0.34.0",
     "redis>=5.2.0",
     "xxhash>=3.5.0",
+    "sse-starlette>=2.2.0",
 ]
 
 [tool.pytest.ini_options]

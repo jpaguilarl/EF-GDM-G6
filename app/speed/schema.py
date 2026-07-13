@@ -55,6 +55,8 @@ class EnrichedRide(BaseModel):
     tolls_amount: float | None
     tip_amount: float | None = None
     payment_type_id: int | None = None
+    ratecode_id: int | None = None
+    hvfhs_license_num: str | None = None
     trip_distance: float | None = None
     extra: float | None = None
     mta_tax: float | None = None
