@@ -31,6 +31,38 @@ MAX_PLAUSIBLE_SPEED_MPH = 80.0  # por encima: fisicamente improbable en ciudad
 MAX_COST_PER_MILE = 30.0  # costo_por_distancia muy por encima de lo tipico
 
 
+def desviacion_tarifa_teorica_py(fare: float | None, flat_fare: float | None) -> float | None:
+    if flat_fare is None or fare is None:
+        return None
+    return abs(fare - flat_fare)
+
+
+def is_anomaly_candidate_py(
+    ratecode: int | None,
+    fare: float | None,
+    flat_fare: float | None,
+    speed_mph: float | None,
+    cost_per_mile: float | None,
+) -> bool:
+    if ratecode == 2 and flat_fare is not None and fare is not None:
+        if abs(fare - flat_fare) > JFK_FARE_TOLERANCE:
+            return True
+    if speed_mph is not None and speed_mph > MAX_PLAUSIBLE_SPEED_MPH:
+        return True
+    if (
+        ratecode == 1
+        and speed_mph is not None
+        and speed_mph > 0
+        and speed_mph <= MAX_PLAUSIBLE_SPEED_MPH
+        and cost_per_mile is not None
+        and cost_per_mile > MAX_COST_PER_MILE
+    ):
+        return True
+    if fare is not None and fare <= 0:
+        return True
+    return False
+
+
 def flat_fare_rows() -> list[tuple]:
     """Filas (ratecode_id, fiscal_year, flat_fare, ratecode_name) para la dim."""
     years = sorted({y for fares in FLAT_FARES.values() for y in fares})

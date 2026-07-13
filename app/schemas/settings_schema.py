@@ -69,6 +69,18 @@ class KmodesConfig(BaseModel):
     random_state: int = 42
 
 
+class SpeedConfig(BaseModel):
+    redis_url: str = "redis://localhost:6379/0"
+    state_ttl_hours: int = 48
+    fraud_score_threshold: float = -0.1
+
+
+class ServingConfig(BaseModel):
+    host: str = "0.0.0.0"
+    port: int = 8000
+    query_cache_ttl_seconds: int = 60
+
+
 class GoldConfig(BaseModel):
     mode: str = "full"
     supply_demand: SupplyDemandConfig = Field(default_factory=SupplyDemandConfig)
@@ -84,3 +96,5 @@ class SettingsSchema(BaseModel):
     datasets: DatasetsConfig
     gold: GoldConfig = Field(default_factory=GoldConfig)
     profiling: ProfilingConfig = Field(default_factory=ProfilingConfig)
+    speed: SpeedConfig = Field(default_factory=SpeedConfig)
+    serving: ServingConfig = Field(default_factory=ServingConfig)

@@ -9,6 +9,18 @@ from pyspark.sql import Column
 from pyspark.sql import functions as F
 
 
+def passenger_group_py(count: int | None) -> str:
+    if count is None:
+        return "Desconocido"
+    if count == 1:
+        return "Solo"
+    if count == 2:
+        return "Pareja"
+    if count <= 4:
+        return "Grupo pequeño"
+    return "Grupo grande"
+
+
 def passenger_group(count: Column) -> Column:
     """Clasifica el numero de pasajeros en 5 categorias nominales."""
     return (

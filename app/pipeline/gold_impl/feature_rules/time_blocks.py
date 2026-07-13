@@ -9,6 +9,36 @@ from pyspark.sql import Column
 from pyspark.sql import functions as F
 
 
+def bloque_horario_py(hour: int) -> str:
+    if hour <= 5:
+        return "Madrugada"
+    if hour <= 9:
+        return "Punta Mañana"
+    if hour <= 15:
+        return "Mediodía"
+    if hour <= 19:
+        return "Punta Tarde"
+    return "Noche"
+
+
+def franja_horaria_py(hour: int) -> str:
+    if hour <= 5:
+        return "Madrugada"
+    if hour <= 11:
+        return "Mañana"
+    if hour <= 18:
+        return "Tarde"
+    return "Noche"
+
+
+def dia_categoria_py(iso_weekday: int) -> str:
+    return "Fin de Semana" if iso_weekday >= 6 else "Día Laborable"
+
+
+def is_weekend_py(iso_weekday: int) -> bool:
+    return iso_weekday >= 6
+
+
 def bloque_horario(hour: Column) -> Column:
     """Bloque operativo de la hora de pickup (D1.1 Volumen y Demanda)."""
     return (

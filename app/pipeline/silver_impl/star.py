@@ -27,14 +27,6 @@ FACTS_DIR = globals.project_root / "data/silver/star/facts"
 # Dimension lookup data
 # ---------------------------------------------------------------------------
 
-VENDOR_ROWS = [
-    (1, "Creative Mobile Technologies"),
-    (2, "VeriFone Inc."),
-    (6, "Myle LLC"),
-    (7, "Hybrid/Helix"),
-    (0, "Desconocido"),
-]
-
 RATECODE_ROWS = [
     (1, "Standard rate"),
     (2, "JFK"),
@@ -54,13 +46,6 @@ PAYMENT_TYPE_ROWS = [
     (5, "Desconocido"),
     (6, "Viaje anulado"),
     (99, "Desconocido"),
-]
-
-SERVICE_ROWS = [
-    ("yellow", "Taxi Amarillo", True, False),
-    ("green", "Taxi Verde", True, False),
-    ("fhvhv", "Alta Movilidad (FHvHv)", True, True),
-    ("fhv", "Alta Movilidad (FHv)", False, True),
 ]
 
 PICKUP_CANDIDATES = [
@@ -89,7 +74,6 @@ class StarSchemaBuilder:
     def build_dimensions(self) -> None:
         self._build_dim_date()
         self._build_dim_zone()
-        self._build_lookup_dim("dim_vendor", VENDOR_ROWS, "vendor_id", "vendor_name")
         self._build_lookup_dim(
             "dim_ratecode", RATECODE_ROWS, "ratecode_id", "ratecode_name"
         )
@@ -99,7 +83,6 @@ class StarSchemaBuilder:
             "payment_type_id",
             "payment_type_name",
         )
-        self._build_dim_service()
 
     def _build_dim_date(self) -> None:
         rows = []
@@ -180,21 +163,6 @@ class StarSchemaBuilder:
         df.write.mode("overwrite").parquet(path)
         self.logger.info(f"  {dim_name}: {len(rows)} registros")
 
-    def _build_dim_service(self) -> None:
-        schema = StructType(
-            [
-                StructField("service_id", StringType(), False),
-                StructField("service_name", StringType(), False),
-                StructField("has_fare", BooleanType(), False),
-                StructField("has_dispatch_base", BooleanType(), False),
-            ]
-        )
-        df = self.spark.createDataFrame(SERVICE_ROWS, schema)
-        path = storage.for_spark(DIMS_DIR / "dim_service.parquet")
-        DIMS_DIR.mkdir(parents=True, exist_ok=True)
-        df.write.mode("overwrite").parquet(path)
-        self.logger.info(f"  dim_service: {len(SERVICE_ROWS)} registros")
-
     # ------------------------------------------------------------------
     # Build fact tables
     # ------------------------------------------------------------------
@@ -251,7 +219,7 @@ class StarSchemaBuilder:
         if heavy_tasks:
             self.logger.info("Construyendo facts pesados (fhvhv, yellow) secuencialmente")
             _run_pool(heavy_tasks, 1)
-        
+
         if light_tasks:
             self.logger.info("Construyendo facts livianos (green, fhv) en paralelo")
             _run_pool(light_tasks, 3)
@@ -469,7 +437,6 @@ class _FactBuilder:
                 F.col("VendorID").alias("vendor_id"),
                 F.col("RatecodeID").alias("ratecode_id"),
                 F.col("payment_type").alias("payment_type_id"),
-                F.lit("yellow").alias("service_id"),
                 F.col(self.pickup_loc).alias("pickup_location_id")
                 if self.pickup_loc
                 else F.lit(None).alias("pickup_location_id"),
@@ -478,7 +445,6 @@ class _FactBuilder:
                 else F.lit(None).alias("dropoff_location_id"),
                 "passenger_count",
                 "trip_distance",
-                "store_and_fwd_flag",
                 "fare_amount",
                 "extra",
                 "mta_tax",
@@ -505,7 +471,6 @@ class _FactBuilder:
                 F.col("VendorID").alias("vendor_id"),
                 F.col("RatecodeID").alias("ratecode_id"),
                 F.col("payment_type").alias("payment_type_id"),
-                F.lit("green").alias("service_id"),
                 F.col(self.pickup_loc).alias("pickup_location_id")
                 if self.pickup_loc
                 else F.lit(None).alias("pickup_location_id"),
@@ -514,7 +479,6 @@ class _FactBuilder:
                 else F.lit(None).alias("dropoff_location_id"),
                 "passenger_count",
                 "trip_distance",
-                "store_and_fwd_flag",
                 "fare_amount",
                 "extra",
                 "mta_tax",
@@ -525,7 +489,6 @@ class _FactBuilder:
                 "total_amount",
                 "congestion_surcharge",
                 "cbd_congestion_fee",
-                "trip_type",
                 "trip_duration_minutes",
             ],
         )
@@ -545,14 +508,10 @@ class _FactBuilder:
                 F.col(self.dropoff_loc).alias("dropoff_location_id")
                 if self.dropoff_loc
                 else F.lit(None).alias("dropoff_location_id"),
-                F.lit("fhvhv").alias("service_id"),
                 "hvfhs_license_num",
-                "dispatching_base_num",
-                "originating_base_num",
                 "request_datetime",
                 "on_scene_datetime",
                 "trip_miles",
-                "trip_time",
                 "base_passenger_fare",
                 "tolls",
                 "bcf",
@@ -564,9 +523,6 @@ class _FactBuilder:
                 "driver_pay",
                 "shared_request_flag",
                 "shared_match_flag",
-                "access_a_ride_flag",
-                "wav_request_flag",
-                "wav_match_flag",
                 "trip_duration_minutes",
             ],
         )
@@ -586,10 +542,5 @@ class _FactBuilder:
                 F.col(self.dropoff_loc).alias("dropoff_location_id")
                 if self.dropoff_loc
                 else F.lit(None).alias("dropoff_location_id"),
-                F.lit("fhv").alias("service_id"),
-                "dispatching_base_num",
-                "SR_Flag",
-                "Affiliated_base_number",
-                "trip_duration_minutes",
             ],
         )
