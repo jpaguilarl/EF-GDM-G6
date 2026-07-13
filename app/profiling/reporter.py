@@ -3,6 +3,7 @@ from pathlib import Path
 from string import Template
 
 from app.profiling.schemas.profiling_schema import ProfilingReport
+from app.utils import storage
 from app.utils.logger import Logger
 
 
@@ -403,8 +404,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 
 class Reporter:
-    def __init__(self, output_dir: str = "data/profiling") -> None:
-        self.output_dir = Path(output_dir)
+    def __init__(self, output_dir: str | Path | None = None) -> None:
+        if output_dir is None:
+            self.output_dir = storage.data_path("profiling")
+        elif isinstance(output_dir, str):
+            # Compatibilidad con llamadas existentes que pasan un string
+            # relativo local; STORAGE_BACKEND=s3 debe usar el default (None).
+            self.output_dir = Path(output_dir)
+        else:
+            self.output_dir = output_dir
         self.logger = Logger()
 
     def write_json(self, report: ProfilingReport) -> Path:

@@ -11,7 +11,6 @@ from pyspark.sql.types import (
 )
 
 from app.pipeline.silver import SilverCleaner, SilverPipeline
-from app.profiling.rules.reasonableness_ranges import MAX_TRIP_DURATION_MINUTES
 
 
 def _zone_ids(spark, bronze_subset):
@@ -167,7 +166,7 @@ def test_reject_timeliness_off_period(spark, bronze_subset):
     cleaner.cleanup()
 
 
-def test_reject_consistency_inverted_dates(spark, bronze_subset):
+def test_reject_datetime_invalid_inverted(spark, bronze_subset):
     zone_ids = _zone_ids(spark, bronze_subset)
     zid = next(iter(zone_ids))
     df = _make_single_row_df(
@@ -183,29 +182,25 @@ def test_reject_consistency_inverted_dates(spark, bronze_subset):
         r["_reject_reason"]
         for r in reject_df.select("_reject_reason").distinct().collect()
     ]
-    assert "consistency_inverted_datetime" in reasons
+    assert "datetime_inverted" in reasons
     cleaner.cleanup()
 
 
-def test_reject_consistency_duration_too_long(spark, bronze_subset):
+def test_long_trip_not_rejected(spark, bronze_subset):
+    """A 25-hour trip is unusual but NOT factually incorrect — should pass."""
     zone_ids = _zone_ids(spark, bronze_subset)
     zid = next(iter(zone_ids))
     df = _make_single_row_df(
         spark, "yellow",
         tpep_pickup_datetime="2023-01-15 08:00:00",
-        tpep_dropoff_datetime="2023-01-16 08:01:00",
+        tpep_dropoff_datetime="2023-01-16 09:00:00",
         PULocationID=zid,
         DOLocationID=zid,
     )
-    diff_min = (24 * 60 + 1)
-    assert diff_min > MAX_TRIP_DURATION_MINUTES
     cleaner = SilverCleaner(spark)
-    _, reject_df = cleaner.clean(df, "yellow", 2023, 1, zone_ids)
-    reasons = [
-        r["_reject_reason"]
-        for r in reject_df.select("_reject_reason").distinct().collect()
-    ]
-    assert "consistency_duration_gt_24h" in reasons
+    clean_df, reject_df = cleaner.clean(df, "yellow", 2023, 1, zone_ids)
+    assert clean_df.count() == 1
+    assert reject_df.count() == 0
     cleaner.cleanup()
 
 
@@ -253,7 +248,7 @@ def test_reject_uniqueness_duplicate(spark, bronze_subset):
 
 def test_first_match(spark):
     from app.pipeline.silver import SilverCleaner
-    from app.pipeline.star import StarSchemaBuilder
+    from app.pipeline.silver_impl.star import StarSchemaBuilder
 
     schema = StructType([
         StructField("foo", StringType()),
@@ -276,101 +271,111 @@ def test_first_match(spark):
     assert result == "PUlocationID"
 
 
-def test_fix_completeness_impute(spark, bronze_subset):
+def test_reject_incomplete_required_null(spark, bronze_subset):
+    """A null in a required column (VendorID for yellow) should reject the row."""
+    zone_ids = _zone_ids(spark, bronze_subset)
+    zid = next(iter(zone_ids))
+    df = _make_single_row_df(
+        spark, "yellow",
+        VendorID=None,
+        PULocationID=zid,
+        DOLocationID=zid,
+    )
+    cleaner = SilverCleaner(spark)
+    _, reject_df = cleaner.clean(df, "yellow", 2023, 1, zone_ids)
+    assert reject_df.count() == 1
+    reasons = [
+        r["_reject_reason"]
+        for r in reject_df.select("_reject_reason").distinct().collect()
+    ]
+    assert any("incomplete_" in r for r in reasons)
+    cleaner.cleanup()
+
+
+def test_nullable_col_passes_through(spark, bronze_subset):
+    """A null in a nullable column (congestion_surcharge for yellow) should NOT
+    reject the row and the null should be preserved as-is."""
+    zone_ids = _zone_ids(spark, bronze_subset)
+    zid = next(iter(zone_ids))
+    df = _make_single_row_df(
+        spark, "yellow",
+        congestion_surcharge=None,
+        PULocationID=zid,
+        DOLocationID=zid,
+    )
+    cleaner = SilverCleaner(spark)
+    clean_df, reject_df = cleaner.clean(df, "yellow", 2023, 1, zone_ids)
+    assert clean_df.count() == 1
+    assert reject_df.count() == 0
+    row = clean_df.select("congestion_surcharge").first()
+    assert row["congestion_surcharge"] is None
+    cleaner.cleanup()
+
+
+def test_no_imputation_nulls_preserved(spark, bronze_subset):
+    """Nullable columns that were previously imputed (passenger_count→1) should
+    now cause rejection since passenger_count is required by default."""
     zone_ids = _zone_ids(spark, bronze_subset)
     zid = next(iter(zone_ids))
     df = _make_single_row_df(
         spark, "yellow",
         passenger_count=None,
-        RatecodeID=None,
-        store_and_fwd_flag=None,
         PULocationID=zid,
         DOLocationID=zid,
     )
     cleaner = SilverCleaner(spark)
-    clean_df, reject_df = cleaner.clean(df, "yellow", 2023, 1, zone_ids)
-    assert clean_df.count() == 1
-    row = clean_df.select(
-        "passenger_count", "RatecodeID", "store_and_fwd_flag"
-    ).first()
-    assert row["passenger_count"] == 1
-    assert row["RatecodeID"] == 1
-    assert row["store_and_fwd_flag"] == "N"
+    _, reject_df = cleaner.clean(df, "yellow", 2023, 1, zone_ids)
+    assert reject_df.count() == 1
+    reasons = [
+        r["_reject_reason"]
+        for r in reject_df.select("_reject_reason").distinct().collect()
+    ]
+    assert any("incomplete_passenger_count" in r for r in reasons)
     cleaner.cleanup()
 
 
-def test_fix_accuracy_recompute_total(spark, bronze_subset):
+def test_source_values_preserved(spark, bronze_subset):
+    """Values that were previously clamped or recomputed should now pass through
+    unchanged: no clamping, no total_amount recomputation."""
     zone_ids = _zone_ids(spark, bronze_subset)
     zid = next(iter(zone_ids))
     df = _make_single_row_df(
         spark, "yellow",
-        fare_amount=10.0,
-        extra=1.0,
-        mta_tax=0.5,
-        tip_amount=2.0,
-        tolls_amount=0.0,
-        improvement_surcharge=0.3,
-        congestion_surcharge=2.5,
-        airport_fee=0.0,
+        trip_distance=1000.0,
         total_amount=99.99,
         PULocationID=zid,
         DOLocationID=zid,
     )
     cleaner = SilverCleaner(spark)
-    clean_df, reject_df = cleaner.clean(df, "yellow", 2023, 1, zone_ids)
+    clean_df, _ = cleaner.clean(df, "yellow", 2023, 1, zone_ids)
     assert clean_df.count() == 1
-    row = clean_df.select("total_amount").first()
-    assert abs(row["total_amount"] - 16.30) < 0.01
+    row = clean_df.select("trip_distance", "total_amount").first()
+    # Values preserved as-is: no clamping of trip_distance, no recomputation of total_amount
+    assert row["trip_distance"] == 1000.0
+    assert row["total_amount"] == 99.99
     cleaner.cleanup()
 
 
-def test_fhvhv_accuracy_skip(spark, bronze_subset):
+def test_fhvhv_driver_pay_preserved(spark, bronze_subset):
+    """driver_pay must pass through unchanged (no accuracy recomputation)."""
     zone_ids = _zone_ids(spark, bronze_subset)
     zid = next(iter(zone_ids))
     original_driver_pay = 100.0
     df = _make_single_row_df(
         spark, "fhvhv",
-        base_passenger_fare=10.0,
-        tolls=1.0,
-        bcf=0.5,
-        sales_tax=0.3,
-        congestion_surcharge=2.5,
-        airport_fee=0.0,
-        tips=1.5,
         driver_pay=original_driver_pay,
-        pickup_datetime="2023-01-15 08:00:00",
-        dropoff_datetime="2023-01-15 08:30:00",
         PULocationID=zid,
         DOLocationID=zid,
     )
     cleaner = SilverCleaner(spark)
-    clean_df, reject_df = cleaner.clean(df, "fhvhv", 2023, 1, zone_ids)
+    clean_df, _ = cleaner.clean(df, "fhvhv", 2023, 1, zone_ids)
     assert clean_df.count() == 1
     row = clean_df.select("driver_pay").first()
     assert row["driver_pay"] == original_driver_pay
     cleaner.cleanup()
 
 
-def test_fix_reasonableness_clamp(spark, bronze_subset):
-    zone_ids = _zone_ids(spark, bronze_subset)
-    zid = next(iter(zone_ids))
-    df = _make_single_row_df(
-        spark, "yellow",
-        trip_distance=1000.0,
-        passenger_count=-1,
-        PULocationID=zid,
-        DOLocationID=zid,
-    )
-    cleaner = SilverCleaner(spark)
-    clean_df, reject_df = cleaner.clean(df, "yellow", 2023, 1, zone_ids)
-    assert clean_df.count() == 1
-    row = clean_df.select("trip_distance", "passenger_count").first()
-    assert row["trip_distance"] == 500.0
-    assert row["passenger_count"] == 0
-    cleaner.cleanup()
-
-
-def test_fix_validity_cast(spark, bronze_subset):
+def test_normalize_types_cast(spark, bronze_subset):
     zone_ids = _zone_ids(spark, bronze_subset)
     zid = next(iter(zone_ids))
     df = _make_single_row_df(
@@ -410,19 +415,43 @@ def test_zone_ids_loaded_correctly(spark, bronze_subset):
     assert all(isinstance(z, int) for z in zone_ids)
 
 
-def test_refund_not_rejected(spark, bronze_subset):
+def test_reject_incomplete_trip_distance(spark, bronze_subset):
+    """trip_distance is required for yellow — null should reject."""
     zone_ids = _zone_ids(spark, bronze_subset)
     zid = next(iter(zone_ids))
     df = _make_single_row_df(
         spark, "yellow",
-        fare_amount=-150.0,
-        payment_type=3,
+        trip_distance=None,
         PULocationID=zid,
         DOLocationID=zid,
     )
     cleaner = SilverCleaner(spark)
-    clean_df, reject_df = cleaner.clean(df, "yellow", 2023, 1, zone_ids)
-    assert clean_df.count() == 1
-    row = clean_df.select("fare_amount").first()
-    assert row["fare_amount"] < 0
+    _, reject_df = cleaner.clean(df, "yellow", 2023, 1, zone_ids)
+    assert reject_df.count() == 1
+    reasons = [
+        r["_reject_reason"]
+        for r in reject_df.select("_reject_reason").distinct().collect()
+    ]
+    assert any("incomplete_trip_distance" in r for r in reasons)
+    cleaner.cleanup()
+
+
+def test_reject_incomplete_fhvhv_trip_miles(spark, bronze_subset):
+    """trip_miles is required for fhvhv — null should reject."""
+    zone_ids = _zone_ids(spark, bronze_subset)
+    zid = next(iter(zone_ids))
+    df = _make_single_row_df(
+        spark, "fhvhv",
+        trip_miles=None,
+        PULocationID=zid,
+        DOLocationID=zid,
+    )
+    cleaner = SilverCleaner(spark)
+    _, reject_df = cleaner.clean(df, "fhvhv", 2023, 1, zone_ids)
+    assert reject_df.count() == 1
+    reasons = [
+        r["_reject_reason"]
+        for r in reject_df.select("_reject_reason").distinct().collect()
+    ]
+    assert any("incomplete_trip_miles" in r for r in reasons)
     cleaner.cleanup()

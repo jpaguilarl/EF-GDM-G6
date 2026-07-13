@@ -1,4 +1,6 @@
-AMOUNT_FORMULAS: dict[str, dict[str, str | list[str]]] = {
+from app.utils.settings import settings
+
+_DEFAULT_FORMULAS: dict[str, dict[str, str | list[str]]] = {
     "yellow": {
         "total": "total_amount",
         "components": [
@@ -10,9 +12,6 @@ AMOUNT_FORMULAS: dict[str, dict[str, str | list[str]]] = {
             "improvement_surcharge",
             "congestion_surcharge",
             "airport_fee",
-            # Peaje CBD (Congestion Relief Zone de la MTA) anadido por la TLC a
-            # partir de 2025; es parte de total_amount. Omitirlo hacia que la
-            # correccion de accuracy restara ~0.75 USD a cada viaje de 2025.
             "cbd_congestion_fee",
         ],
     },
@@ -27,8 +26,6 @@ AMOUNT_FORMULAS: dict[str, dict[str, str | list[str]]] = {
             "ehail_fee",
             "improvement_surcharge",
             "congestion_surcharge",
-            # Peaje CBD (Congestion Relief Zone de la MTA), TLC 2025+; parte de
-            # total_amount (ver nota en la formula de yellow).
             "cbd_congestion_fee",
         ],
     },
@@ -46,4 +43,20 @@ AMOUNT_FORMULAS: dict[str, dict[str, str | list[str]]] = {
     },
 }
 
-AMOUNT_TOLERANCE = 0.02
+AMOUNT_FORMULAS: dict[str, dict[str, str | list[str]]] = {
+    k: dict(v) for k, v in _DEFAULT_FORMULAS.items()
+}
+
+_formulas = settings.profiling.rules.amount_formulas
+if _formulas:
+    for category, formula in _formulas.items():
+        if category not in AMOUNT_FORMULAS:
+            AMOUNT_FORMULAS[category] = {}
+        for key, value in formula.items():
+            AMOUNT_FORMULAS[category][key] = value
+
+AMOUNT_TOLERANCE = (
+    settings.profiling.rules.amount_tolerance
+    if settings.profiling.rules.amount_tolerance is not None
+    else 0.02
+)

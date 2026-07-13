@@ -1,0 +1,140 @@
+# Airflow con LocalExecutor (un solo worker) + Postgres como metadata DB.
+# Spark corre embebido en el proceso de cada tarea (dentro del contenedor de
+# Airflow) — no hay contenedor Spark/cluster separado, a proposito (ver
+# CLAUDE.md / plan de refactor). Servicio jupyter opcional para correr los
+# notebooks de revision como documentacion viva sobre los mismos datos.
+#
+# Uso:
+#   cp .env.example .env   # completar STORAGE_BACKEND/AWS_*/S3_* si aplica
+#   docker compose up airflow-init
+#   docker compose up
+
+x-airflow-common: &airflow-common
+  image: tlc-airflow-base:latest
+  build: .
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: ${AIRFLOW__CORE__EXECUTOR:-LocalExecutor}
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://airflow:airflow@postgres/airflow}
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-}
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    # Pasadas tal cual a cada tarea (BashOperator invoca `uv run main.py ...`
+    # dentro de este mismo contenedor): app/utils/storage.py y SparkClient las
+    # leen de os.environ, nunca de config.yaml.
+    STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
+    AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+    AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+    AWS_REGION: ${AWS_REGION:-us-east-1}
+    S3_BUCKET: ${S3_BUCKET:-}
+    S3_PREFIX: ${S3_PREFIX:-tlc-pipeline}
+    # Shuffle/spill de Spark en disco DEL CONTENEDOR, no en el bind mount de
+    # ./data (en Windows/Docker Desktop ese mount va por gRPC-FUSE y el shuffle
+    # de 5-15GB lo castigaria). Ver SPARK_LOCAL_DIR en app/utils/spark.py.
+    SPARK_LOCAL_DIR: /tmp/spark-temp
+    # Recursos de Spark DENTRO del contenedor: mas prudentes que el default
+    # bare-metal (10g/local[10]) porque el VM de WSL2 comparte RAM con Airflow +
+    # Postgres. Override-ables desde .env. El VM debe tener >=8GB (ver .wslconfig).
+    SPARK_DRIVER_MEMORY: ${SPARK_DRIVER_MEMORY:-8g}
+    SPARK_MASTER_CORES: ${SPARK_MASTER_CORES:-8}
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./airflow-logs:/opt/airflow/logs
+    - ./config.yaml:/opt/airflow/project/config.yaml
+    - ./data:/opt/airflow/project/data
+    - ./logs:/opt/airflow/project/logs
+    - ./app:/opt/airflow/project/app
+    - ./main.py:/opt/airflow/project/main.py
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on: &airflow-common-depends-on
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create \
+          --username "${_AIRFLOW_WWW_USER_USERNAME:-admin}" \
+          --password "${_AIRFLOW_WWW_USER_PASSWORD:-admin}" \
+          --firstname Admin --lastname User --role Admin \
+          --email admin@example.com || true
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: "true"
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8080:8080"
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  jupyter:
+    image: tlc-airflow-base:latest
+    entrypoint: /opt/airflow/project/.venv/bin/jupyter
+    command:
+      - lab
+      - --ip=0.0.0.0
+      - --port=8888
+      - --no-browser
+      - --NotebookApp.token=""
+      - --notebook-dir=/opt/airflow/project
+    environment:
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_PREFIX: ${S3_PREFIX:-tlc-pipeline}
+      SPARK_LOCAL_DIR: /tmp/spark-temp
+      SPARK_DRIVER_MEMORY: ${SPARK_DRIVER_MEMORY:-8g}
+      SPARK_MASTER_CORES: ${SPARK_MASTER_CORES:-8}
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./notebooks:/opt/airflow/project/notebooks
+      - ./data:/opt/airflow/project/data
+      - ./config.yaml:/opt/airflow/project/config.yaml
+      - ./app:/opt/airflow/project/app
+      - ./main.py:/opt/airflow/project/main.py
+    restart: unless-stopped
+
+volumes:
+  postgres-db-volume:

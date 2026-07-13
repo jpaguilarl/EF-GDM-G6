@@ -3,9 +3,9 @@ from datetime import datetime
 from pyspark.sql import Row, functions as F
 from pyspark.sql.types import DoubleType, IntegerType, StringType, StructField, StructType
 
-from app.pipeline.gold.feature_rules.generosity import categoria_generosidad
-from app.pipeline.gold.feature_rules.passenger_groups import passenger_group
-from app.pipeline.gold.feature_rules.ratecode_tariff import (
+from app.pipeline.gold_impl.feature_rules.generosity import categoria_generosidad
+from app.pipeline.gold_impl.feature_rules.passenger_groups import passenger_group
+from app.pipeline.gold_impl.feature_rules.ratecode_tariff import (
     FLAT_FARES,
     MAX_COST_PER_MILE,
     MAX_PLAUSIBLE_SPEED_MPH,
@@ -13,7 +13,7 @@ from app.pipeline.gold.feature_rules.ratecode_tariff import (
     flat_fare_rows,
     is_anomaly_candidate,
 )
-from app.pipeline.gold.feature_rules.time_blocks import (
+from app.pipeline.gold_impl.feature_rules.time_blocks import (
     bloque_horario,
     dia_categoria,
     franja_horaria,

@@ -70,7 +70,7 @@ def test_pipeline_e2e(
         fp = tmp_path / "data" / "silver" / "star" / "facts" / f"fact_{cat}_trip" / "2025-01.parquet"
         assert fp.exists()
 
-    from app.pipeline.gold.gold_pipeline import GoldPipeline
+    from app.pipeline.gold import GoldPipeline
     gold = GoldPipeline(mode="full")
     gold.run(settings)
     assert (tmp_path / "data" / "gold" / "dims" / "dim_date_gold.parquet").exists()

@@ -16,7 +16,7 @@ from pyspark.sql.types import (
 )
 
 from app.pipeline.silver import SilverCleaner
-from app.pipeline.star import StarSchemaBuilder
+from app.pipeline.silver_impl.star import StarSchemaBuilder
 from app.profiling.rules.reasonableness_ranges import MAX_TRIP_DURATION_MINUTES
 from app.utils.globals import globals
 

@@ -19,3 +19,6 @@ class Settings:
     @property
     def config(self) -> SettingsSchema:
         return self._config
+
+
+settings = Settings().config
