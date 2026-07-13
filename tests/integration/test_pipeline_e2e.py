@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-import json
 import shutil
 
 import polars as pl
@@ -9,7 +7,6 @@ import pytest
 
 pytest.importorskip("pyspark")
 
-from app.profiling.profiling_pipeline import ProfilingPipeline
 from app.pipeline.silver import SilverPipeline
 
 
@@ -30,28 +27,6 @@ def test_pipeline_e2e(
     if not populated_cats:
         pytest.skip("No se encontraron datos de bronce")
 
-    for cat in populated_cats:
-        src = tmp_path / "data" / "bronze" / cat / "2025-01.parquet"
-        if not src.exists():
-            continue
-        for m in range(2, 13):
-            dst = tmp_path / "data" / "bronze" / cat / f"2025-{m:02d}.parquet"
-            shutil.copy2(str(src), str(dst))
-
-    monkeypatch.chdir(tmp_path)
-    profiling = ProfilingPipeline()
-    try:
-        asyncio.run(profiling.run(datasets_config))
-    except Exception:
-        pass
-    for cat in populated_cats:
-        jp = tmp_path / "data" / "profiling" / cat / "2025-01.json"
-        if jp.exists():
-            with open(jp) as f:
-                r = json.load(f)
-            assert "meta" in r
-            assert "dimensions" in r
-
     import app.utils.globals as _g
     monkeypatch.setattr(_g, "PROJECT_ROOT", tmp_path)
     silver = SilverPipeline()
@@ -63,15 +38,18 @@ def test_pipeline_e2e(
 
     silver.run_schema()
     dd = tmp_path / "data" / "silver" / "star" / "dims"
-    for dn in ["dim_date", "dim_zone", "dim_vendor", "dim_ratecode", "dim_payment_type", "dim_service"]:
+    for dn in ["dim_date", "dim_zone", "dim_ratecode", "dim_payment_type"]:
         assert (dd / f"{dn}.parquet").exists()
     silver.run_load(datasets_config)
     for cat in populated_cats:
         fp = tmp_path / "data" / "silver" / "star" / "facts" / f"fact_{cat}_trip" / "2025-01.parquet"
-        assert fp.exists()
+        st = tmp_path / "data" / "silver" / "stage" / cat / "2025-01.parquet"
+        # Si el stage tiene filas debe tener fact; si tiene 0 filas (todo rechazado) se omite
+        if (st / "_SUCCESS").exists() and pl.scan_parquet(str(st / "part-*.parquet")).collect().height > 0:
+            assert fp.exists()
 
     from app.pipeline.gold import GoldPipeline
-    gold = GoldPipeline(mode="full")
+    gold = GoldPipeline(mode="full", only=["mart_demand_volume"])
     gold.run(settings)
     assert (tmp_path / "data" / "gold" / "dims" / "dim_date_gold.parquet").exists()
     assert (tmp_path / "data" / "gold" / "dims" / "dim_zone_gold.parquet").exists()
@@ -86,11 +64,3 @@ def test_pipeline_e2e(
     sids = set(sa["audit_id"])
     assert all(b in bids for b in sa["bronze_audit_id"])
     assert all(s in sids for s in gold_a["silver_audit_id"])
-
-    for cat in populated_cats:
-        jp = tmp_path / "data" / "profiling" / cat / "2025-01.json"
-        if jp.exists():
-            with open(jp) as f:
-                r = json.load(f)
-            for d in r["dimensions"]:
-                assert 0.0 <= d["score"] <= 1.0

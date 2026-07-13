@@ -11,7 +11,7 @@ class RealtimeAggregator:
     def __init__(self, redis: RedisClient, config: SpeedConfig):
         self.redis = redis
         self.config = config
-        self._block_seconds = 15 * 60
+        self._block_seconds = config.block_minutes * 60
 
     async def on_event(self, ride: EnrichedRide) -> None:
         if not await self._update_uniqueness(ride):
@@ -31,8 +31,6 @@ class RealtimeAggregator:
         key = f"rt:dv:{ride.service_id}:{ride.pickup_datetime.date()}:{ride.pickup_hour}:{ride.pu_location_id}"
         pipe = self.redis.redis.pipeline()
         pipe.hincrby(key, "viajes", 1)
-        if ride.trip_duration_minutes is not None:
-            pass
         pipe.expire(key, self.redis._ttl)
         await pipe.execute()
 
@@ -95,6 +93,8 @@ class RealtimeAggregator:
             pu_key = f"rt:sd:{ride.pu_location_id}:{block_unix}"
             pipe = self.redis.redis.pipeline()
             pipe.hincrby(pu_key, "salientes", 1)
+            if ride.pu_borough:
+                pipe.hset(pu_key, "borough", ride.pu_borough)
             pipe.expire(pu_key, self.redis._ttl)
             await pipe.execute()
 
@@ -102,6 +102,8 @@ class RealtimeAggregator:
             do_key = f"rt:sd:{ride.do_location_id}:{block_unix}"
             pipe = self.redis.redis.pipeline()
             pipe.hincrby(do_key, "entrantes", 1)
+            if ride.do_borough:
+                pipe.hset(do_key, "borough", ride.do_borough)
             pipe.expire(do_key, self.redis._ttl)
             await pipe.execute()
 

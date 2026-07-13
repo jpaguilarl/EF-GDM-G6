@@ -36,6 +36,34 @@ footer, profiling reuses report JSONs, silver skips existing stage months, star 
 gold `incremental` skips existing partitions). To force a re-run, delete the corresponding output.
 Interrupted runs resume by relaunching the same command.
 
+## Serving layer (Lambda architecture)
+
+- **`app.serving/`** — FastAPI app with historic GET endpoints (Polars lazy scans
+  over gold marts) + real-time SSE streams (merged batch + Redis state).
+- **`app.speed/`** — Speed processing engine: `POST /api/v1/ingest` → clean →
+  enrich → aggregate (Redis HINCRBY) → fraud score (IsolationForest from joblib).
+- **Redis** — speed layer state (aggregations, uniqueness check via SETNX trip_id).
+  TTL 48h, ~50–100MB. Key prefix `rt:`.
+- **trip_id parity** — `xxhash64` of `SilverCleaner.COMPOSITE_KEYS` in pure Python
+  (xxhash lib) produces the same BIGINT as Spark's `F.xxhash64`. A ride ingested
+  real-time has the same trip_id as when it flows through the batch silver layer.
+- **No Spark in serving** — historic queries use Polars `scan_parquet()` (lazy,
+  predicate pushdown); real-time uses pure Python + Redis. The serving container
+  is ~500MB vs ~2GB for Spark.
+- **Merge boundary** — batch gold has complete past blocks; Redis has the current
+  incomplete block. `MergedViewReader` stitches them: deduplication by key tuple
+  (batch wins on overlap). Old Redis keys expire after 48h (TTL) — the canonical
+  data is always in silver/star facts (trip_id parity guarantees the batch
+  pipeline picks it up).
+
+### Run
+
+```bash
+uv run main.py --serve                          # start serving layer
+uv run main.py --speed                          # speed engine only (stdin JSON)
+docker compose up serving redis -d              # Docker
+```
+
 ## `app.` package (flat, no `src/`)
 
 | Module | Class | Role |

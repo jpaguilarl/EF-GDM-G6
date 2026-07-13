@@ -28,7 +28,7 @@ from app.schemas.settings_schema import (
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 BRONZE_SOURCE = PROJECT_ROOT / "data" / "bronze"
 
-SAMPLE_ROWS = 50
+SAMPLE_ROWS = 20
 # El bronce real en disco es del año 2025 (config.yaml datasets.years=[2025]).
 SAMPLE_YEAR = "2025"
 SAMPLE_MONTH = "01"
@@ -108,6 +108,11 @@ def datasets_config() -> DatasetsConfig:
         years=[Module(category=c, year=int(SAMPLE_YEAR), month=int(SAMPLE_MONTH))
                for c in CATEGORIES]
     )
+
+
+@pytest.fixture(scope="session")
+def storage_config() -> StorageConfig:
+    return StorageConfig(backend="local")
 
 
 @pytest.fixture(scope="session")

@@ -1,6 +1,6 @@
 from pyspark.sql import Row, functions as F
 
-from app.pipeline.gold import mart_builder
+from app.pipeline.gold_impl import mart_builder
 from app.pipeline.gold_impl.mart_builder import (
     GoldBuilder,
     GoldContext,

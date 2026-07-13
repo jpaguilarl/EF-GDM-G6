@@ -5,6 +5,38 @@ Formato orientado al usuario (equipos de analítica / BI / ML).
 
 ---
 
+## 2026-07-13 - v0.7.0
+
+Lambda architecture fully wired end-to-end: historic queries (Polars lazy scans over gold marts) + real-time ingestion (Redis HINCRBY + ML scoring) + merged SSE views. Docker Compose orchestration for serving, Redis, and Jupyter; Airflow DAG for the serving/speed layer; comprehensive architecture documentation; end-to-end integration tests.
+
+### Added
+- **`docker-compose.yml`** — Docker Compose file for serving layer (FastAPI + Redis + optional Jupyter); replaces the need to run `uv run main.py --serve` bare-metal for deployment
+- **`dags/dag_08_serving.py`** — Airflow DAG that starts the FastAPI serving layer (triggered after gold + ML models)
+- **`docs/ARQUITECTURA.md`** — comprehensive Lambda architecture reference covering serving layer, speed layer, SSE streaming, trip_id parity, merge boundary, Redis state model, and component interaction diagrams (418 lines)
+- **`AGENTS.md`** — AI assistant instructions for the project (OpenCode/agentic IDEs)
+- **`.env.example`** — environment variable template for `STORAGE_BACKEND`, AWS credentials, Spark tuning, and Airflow bootstrap
+- **`main.py --serve` / `main.py --speed`** — CLI subcommands to start the serving layer (FastAPI) or speed engine (stdin JSON processing)
+- **Integration tests**: `tests/integration/test_serving_e2e.py` (full serving integration: historic, real-time ingest, SSE streaming, merged views, admin model reload)
+- **Unit tests**: `tests/unit/test_serving_app.py` (FastAPI app initialization and lifespan wiring)
+
+### Changed
+- **Silver executor refactored** (`app/pipeline/silver.py`): `SilverPipeline.run_quality()` now contains the orchestrator logic inline (was delegated to `silver_impl/pipeline.py`); better error collection and abort-on-failure behavior
+- **Gold executor refactored** (`app/pipeline/gold.py`): `GoldPipeline.run()` moved orchestrator logic from `gold_impl/pipeline.py` into the executor; added `--serve`-aware config checks
+- **Removed `app/pipeline/gold_impl/pipeline.py`** and **`app/pipeline/silver_impl/pipeline.py`** — logic migrated into the respective executor modules for simpler architecture
+- **`app/serving/merged_view.py`** — improved Redis hash key handling and deduplication logic
+- **`app/serving/app.py`** — lifespan now wires all speed-layer components (FraudScorer, TripProfiler, RealtimeAggregator) as EventBus subscribers
+- **`app/speed/aggregation.py`** — extended aggregation schemas for all 6 mart-compatible Redis keys
+- **`app/speed/schema.py`** — added `categoria_generosidad` and `service_type` fields to `EnrichedRide`
+- **`docs/CLI.md`** — added `--serve` and `--speed` commands; Docker Compose and Airflow deployment sections
+- **`docs/CONFIG.md`** — added `SpeedConfig` and `ServingConfig` sections; Docker/Airflow configuration reference
+- **`config.yaml`** — added `serving:` and `speed:` configuration sections
+- **`app/schemas/settings_schema.py`** — added `SpeedConfig` and `ServingConfig` Pydantic models
+
+### Fixed
+- **`app/speed/event_processor.py`** — null-safe enrichment of `categoria_generosidad` and improved rejection rule logging
+- **`app/speed/ingest.py`** — consistent error response format for validation failures
+- **`tests/spark/test_gold_dimensions.py`** and **`tests/spark/test_gold_marts.py`** — minor test fixture alignment
+
 ## 2026-07-13 - v0.6.2
 
 Real-time SSE endpoint merges historic + live Redis data across all 6 marts; ML models (IsolationForest fraud scoring, KModes trip profiling) run as EventBus subscribers on every ingested ride.

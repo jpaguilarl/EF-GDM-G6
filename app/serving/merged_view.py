@@ -60,6 +60,7 @@ def _sd_key_to_row(parts: list[str], hvals: dict[str, str]) -> dict[str, Any]:
     return {
         "location_id": loc_id,
         "bloque_temporal_t": bloque_t.isoformat(),
+        "borough": hvals.get("borough"),
         "entrantes": entrantes,
         "salientes": salientes,
         "flujo_neto_oferta": flujo,
@@ -102,8 +103,8 @@ def op_key_from_ride(ride: EnrichedRide) -> str:
     return f"rt:op:{ride.service_id}:{ride.pickup_datetime.date()}:{ride.bloque_horario}:{ride.pu_location_id}"
 
 
-def sd_key_from_ride(ride: EnrichedRide) -> str:
-    block = int(ride.pickup_datetime.timestamp() // 900 * 900)
+def sd_key_from_ride(ride: EnrichedRide, block_seconds: int = 900) -> str:
+    block = int(ride.pickup_datetime.timestamp() // block_seconds * block_seconds)
     return f"rt:sd:{ride.pu_location_id}:{block}"
 
 
@@ -201,7 +202,11 @@ class MergedViewReader:
         config = MART_CONFIGS.get(mart)
         if not config:
             return None
-        key = config["ride_to_key"](ride)
+        if mart == "mart_supply_demand_balance":
+            block_seconds = self.block_minutes * 60
+            key = sd_key_from_ride(ride, block_seconds)
+        else:
+            key = config["ride_to_key"](ride)
         hvals = await self.redis.redis.hgetall(key)
         if not hvals:
             return None

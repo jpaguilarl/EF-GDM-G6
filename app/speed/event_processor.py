@@ -32,10 +32,10 @@ UNION_REVENUE_COL = {
 }
 
 REQUIRED_FIELDS = {
-    "yellow": ["service_id", "pickup_datetime", "vendor_id"],
-    "green": ["service_id", "pickup_datetime", "vendor_id"],
-    "fhvhv": ["service_id", "pickup_datetime", "hvfhs_license_num"],
-    "fhv": ["service_id", "pickup_datetime"],
+    "yellow": ["service_id", "pickup_datetime", "vendor_id", "pu_location_id"],
+    "green": ["service_id", "pickup_datetime", "vendor_id", "pu_location_id"],
+    "fhvhv": ["service_id", "pickup_datetime", "hvfhs_license_num", "pu_location_id"],
+    "fhv": ["service_id", "pickup_datetime", "pu_location_id"],
 }
 
 
@@ -52,6 +52,10 @@ class EventProcessor:
         self.config = config
 
     def process(self, event: RideEvent) -> EnrichedRide | None:
+        if event.pickup_datetime and event.pickup_datetime.tzinfo is not None:
+            event.pickup_datetime = event.pickup_datetime.replace(tzinfo=None)
+        if event.dropoff_datetime and event.dropoff_datetime.tzinfo is not None:
+            event.dropoff_datetime = event.dropoff_datetime.replace(tzinfo=None)
         for rule in self.REJECT_RULES:
             if not getattr(self, rule)(event):
                 return None
@@ -151,6 +155,8 @@ class EventProcessor:
             shared_request_flag=event.shared_request_flag,
             shared_match_flag=event.shared_match_flag,
             categoria_generosidad=cat_gen,
+            ratecode_id=event.ratecode_id,
+            hvfhs_license_num=event.hvfhs_license_num
         )
 
     def _compute_trip_id(self, event: RideEvent) -> int:

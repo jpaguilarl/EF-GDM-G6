@@ -56,11 +56,11 @@ def star_setup(tmp_path_factory, spark, bronze_subset):
 def _patches(monkeypatch, star_setup):
     monkeypatch.setattr("app.utils.globals.PROJECT_ROOT", star_setup)
     monkeypatch.setattr(
-        "app.pipeline.star.DIMS_DIR",
+        "app.pipeline.silver_impl.star.DIMS_DIR",
         star_setup / "data/silver/star/dims",
     )
     monkeypatch.setattr(
-        "app.pipeline.star.FACTS_DIR",
+        "app.pipeline.silver_impl.star.FACTS_DIR",
         star_setup / "data/silver/star/facts",
     )
 

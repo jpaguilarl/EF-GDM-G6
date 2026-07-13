@@ -45,6 +45,7 @@ class TripProfiler:
             f"rt:cluster:{ride.trip_id}",
             mapping={"cluster_id": cluster_id, "service_id": ride.service_id},
         )
+        await self.redis.redis.expire(f"rt:cluster:{ride.trip_id}", self.redis._ttl)
 
     def _extract_features(self, ride) -> dict | None:
         if ride.service_id == "fhvhv":

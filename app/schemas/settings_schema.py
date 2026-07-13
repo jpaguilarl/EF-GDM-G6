@@ -73,6 +73,7 @@ class SpeedConfig(BaseModel):
     redis_url: str = "redis://localhost:6379/0"
     state_ttl_hours: int = 48
     fraud_score_threshold: float = -0.1
+    block_minutes: int = 15
 
 
 class ServingConfig(BaseModel):

@@ -13,7 +13,11 @@ async def ingest(event: RideEvent, request: Request):
     processor: EventProcessor = request.app.state.processor
     bus: EventBus = request.app.state.event_bus
 
-    enriched = processor.process(event)
+    try:
+        enriched = processor.process(event)
+    except Exception:
+        return JSONResponse({"status": "error", "message": "Internal processing error"}, status_code=500)
+
     if enriched is None:
         return JSONResponse({"status": "rejected"}, status_code=422)
 

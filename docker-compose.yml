@@ -136,5 +136,44 @@ services:
       - ./main.py:/opt/airflow/project/main.py
     restart: unless-stopped
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      retries: 5
+    restart: unless-stopped
+
+  serving:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - STORAGE_BACKEND=local
+      - REDIS_URL=redis://redis:6379/0
+      - SPARK_DRIVER_MEMORY=2g
+      - SPARK_MASTER_CORES=2
+      - SPARK_LOCAL_DIR=/tmp/spark-temp
+    command: >
+      uv run uvicorn app.serving.app:app
+      --host 0.0.0.0 --port 8000
+    volumes:
+      - ./data:/opt/airflow/project/data
+      - ./config.yaml:/opt/airflow/project/config.yaml
+      - ./app:/opt/airflow/project/app
+      - ./main.py:/opt/airflow/project/main.py
+    restart: unless-stopped
+
 volumes:
   postgres-db-volume:
+  redis-data:

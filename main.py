@@ -2,6 +2,7 @@ import argparse
 import asyncio
 
 from app.pipeline.bronze import BronzePipeline
+from app.pipeline.gold import GoldPipeline
 from app.pipeline.gold_impl.ml.isolation_forest_model import IsolationForestModelPipeline
 from app.pipeline.gold_impl.ml.kmodes_model import KModesModelPipeline
 from app.pipeline.gold_impl.ml.sarimax_model import SariMaxModelPipeline
@@ -9,6 +10,7 @@ from app.pipeline.silver import SilverPipeline
 from app.profiling.profiling_pipeline import ProfilingPipeline
 from app.utils.logger import Logger
 from app.utils.settings import settings
+from app.utils.globals import globals
 
 
 async def run_bronze_pipeline() -> None:
@@ -76,8 +78,6 @@ def run_silver_load() -> None:
 
 
 def run_gold_pipeline(mode: str, only: list[str] | None) -> None:
-    from app.pipeline.gold import GoldPipeline
-
     logger = Logger()
 
     logger.info(f"Iniciando pipeline de oro (gold) | modo={mode}")
@@ -154,6 +154,86 @@ def _missing_bronze(datasets) -> list[str]:
         if not storage.parquet_footer_readable(f):
             missing.append(str(f))
     return missing
+
+
+def run_serving() -> None:
+    """Inicia la capa serving de FastAPI (historico + real-time + fraud SSE)."""
+    logger = Logger()
+    logger.info("Iniciando capa serving (FastAPI)")
+
+    import uvicorn
+    from app.serving.app import create_app
+
+    app = create_app()
+    uvicorn.run(
+        app,
+        host=settings.serving.host,
+        port=settings.serving.port,
+        log_level="info",
+    )
+
+
+def run_speed() -> None:
+    """Motor de speed sin HTTP: EventProcessor + Redis, lee eventos de stdin (JSON lines)."""
+    import asyncio
+    import json
+    import sys
+
+    from app.speed.event_processor import EventProcessor
+    from app.speed.pubsub import EventBus
+    from app.speed.redis_client import RedisClient
+    from app.speed.schema import RideEvent
+    from app.speed.zone_lookup import ZoneLookup
+    from app.speed.aggregation import RealtimeAggregator
+    from app.speed.fraud_scorer import FraudScorer
+    from app.speed.trip_profiler import TripProfiler
+    from app.speed.ml_state import ModelLoader
+
+    logger = Logger()
+    logger.info("Iniciando motor de speed (stdin JSON lines)")
+
+    async def _run():
+        redis_client = RedisClient(settings.speed.redis_url, settings.speed.state_ttl_hours)
+        await redis_client.connect()
+
+        zone_lookup = ZoneLookup()
+        zone_path = globals.project_root / "data/bronze/zone-lookup/zone-lookup-table.parquet"
+        if zone_path.exists():
+            zone_lookup.load(zone_path)
+
+        event_bus = EventBus()
+        processor = EventProcessor(zone_lookup, settings.speed)
+
+        model_loader = ModelLoader()
+        model_loader.load()
+
+        aggregator = RealtimeAggregator(redis_client, settings.speed)
+        fraud_scorer = FraudScorer(model_loader, settings.speed, redis_client)
+        trip_profiler = TripProfiler(model_loader, redis_client)
+
+        event_bus.subscribe(aggregator.on_event)
+        event_bus.subscribe(fraud_scorer.on_event)
+        event_bus.subscribe(trip_profiler.on_event)
+
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                raw = json.loads(line)
+                event = RideEvent(**raw)
+                enriched = processor.process(event)
+                if enriched is not None:
+                    await event_bus.publish(enriched)
+                    print(json.dumps({"status": "accepted", "trip_id": enriched.trip_id}))
+                else:
+                    print(json.dumps({"status": "rejected"}))
+            except Exception as e:
+                print(json.dumps({"status": "error", "message": str(e)}))
+
+        await redis_client.close()
+
+    asyncio.run(_run())
 
 
 def run_full_pipeline() -> None:
@@ -256,10 +336,26 @@ def main() -> None:
         choices=["kmodes", "isolation", "sarimax"],
         help="Entrenar modelos ML: kmodes (default), isolation, o sarimax",
     )
+    parser.add_argument(
+        "--serve",
+        action="store_true",
+        help="Iniciar capa serving (FastAPI + speed layer). "
+        "Requiere Redis y datos gold en data/gold/",
+    )
+    parser.add_argument(
+        "--speed",
+        action="store_true",
+        help="Iniciar solo el motor de speed (EventProcessor + Redis, sin HTTP). "
+        "Util para tests de integracion con productores de eventos.",
+    )
     args = parser.parse_args()
 
     if args.all:
         run_full_pipeline()
+    elif args.serve:
+        run_serving()
+    elif args.speed:
+        run_speed()
     elif args.silver:
         if args.silver == "quality":
             run_silver_quality()

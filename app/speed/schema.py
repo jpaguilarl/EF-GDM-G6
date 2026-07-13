@@ -6,6 +6,7 @@ from pydantic import BaseModel
 class RideEvent(BaseModel):
     service_id: str
     pickup_datetime: datetime
+    request_datetime: datetime | None = None
     dropoff_datetime: datetime | None = None
     pu_location_id: int | None = None
     do_location_id: int | None = None

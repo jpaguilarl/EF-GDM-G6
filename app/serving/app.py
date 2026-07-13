@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from app.serving.merged_view import MergedViewReader
 from app.serving.query_engine import PolarsQueryEngine
 from app.serving.routes import admin, health, historic, realtime
+from app.speed.aggregation import RealtimeAggregator
 from app.speed.event_processor import EventProcessor
 from app.speed.fraud_scorer import FraudScorer
 from app.speed.ingest import router as ingest_router
@@ -38,6 +39,8 @@ async def lifespan(app: FastAPI):
     fraud_scorer = FraudScorer(model_loader, settings.speed, redis_client)
     trip_profiler = TripProfiler(model_loader, redis_client)
 
+    aggregator = RealtimeAggregator(redis_client, settings.speed)
+    event_bus.subscribe(aggregator.on_event)
     event_bus.subscribe(fraud_scorer.on_event)
     event_bus.subscribe(trip_profiler.on_event)
 

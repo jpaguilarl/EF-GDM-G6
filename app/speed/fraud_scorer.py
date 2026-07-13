@@ -102,4 +102,3 @@ class FraudScorer:
         pipe.hset(f"rt:fraud:{trip_id}", mapping=serialized)
         pipe.expire(f"rt:fraud:{trip_id}", self.redis._ttl)
         await pipe.execute()
-        await self.redis.redis.publish("rt:fraud_events", str(data))
