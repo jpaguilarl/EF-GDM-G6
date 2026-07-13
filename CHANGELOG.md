@@ -5,6 +5,27 @@ Formato orientado al usuario (equipos de analítica / BI / ML).
 
 ---
 
+## 2026-07-13 - v0.6.1
+
+Real-time aggregation over Redis (speed view) — EventBus subscriber maintains rolling 6-mart state with 48h TTL.
+
+### Added
+- **`app/speed/redis_client.py`**: async Redis client factory with configurable TTL, singleton pattern for FastAPI
+- **`app/speed/aggregation.py`**: `RealtimeAggregator` — EventBus subscriber that updates 6 mart schemas via Redis `HINCRBY`/`HINCRBYFLOAT` pipelines:
+  - `demand_volume`: `viajes` per `{service}:{date}:{hour}:{zone}`
+  - `financial_performance`: fare component SUMs per service type (yellow/green vs fhvhv)
+  - `operational_profile`: duration, distance, shared-request/match counters
+  - `supply_demand_balance`: `entrantes`/`salientes` per location × 15-min block
+  - `tipping_behavior`: tip aggregates by borough × payment type × generosity category
+  - `uniqueness` guard: SETNX on `trip_id` prevents double-counting duplicate events
+- **EnrichedRide schema**: 14 new pass-through fields (`tip_amount`, `payment_type_id`, `trip_distance`, `extra`, `mta_tax`, `total_amount`, `base_passenger_fare`, `tips`, `driver_pay`, `trip_miles`, `shared_request_flag`, `shared_match_flag`, `categoria_generosidad`) and `categoria_generosidad` enrichment in `EventProcessor._enrich()`
+- **Unit tests**: `test_speed_aggregation.py` (13 tests) + `test_speed_redis_keys.py` (12 tests) using fakeredis async
+
+### Changed
+- `app/speed/schema.py` — `EnrichedRide` extended with all fields required by the 6 mart aggregations
+- `app/speed/event_processor.py` — computes `categoria_generosidad` from `tip_amount`/`fare_amount`; passes through all RideEvent fields to EnrichedRide
+- `pyproject.toml` — added `fakeredis[lua]`, `pytest-asyncio` dev dependencies; enabled `asyncio_mode = auto`
+
 ## 2026-07-13 - v0.6.0
 
 Initial real-time ingestion (speed) and REST API (serving) layers built on the gold marts.

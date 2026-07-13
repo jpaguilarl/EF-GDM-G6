@@ -53,3 +53,16 @@ class EnrichedRide(BaseModel):
     revenue: float | None
     fare_amount: float | None
     tolls_amount: float | None
+    tip_amount: float | None = None
+    payment_type_id: int | None = None
+    trip_distance: float | None = None
+    extra: float | None = None
+    mta_tax: float | None = None
+    total_amount: float | None = None
+    base_passenger_fare: float | None = None
+    tips: float | None = None
+    driver_pay: float | None = None
+    trip_miles: float | None = None
+    shared_request_flag: str | None = None
+    shared_match_flag: str | None = None
+    categoria_generosidad: str | None = None

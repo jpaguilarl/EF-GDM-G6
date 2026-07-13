@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 import xxhash
 
 from app.pipeline.silver import SilverCleaner
+from app.pipeline.gold_impl.feature_rules import generosity as gen
 from app.pipeline.gold_impl.feature_rules import time_blocks as tb
 from app.pipeline.gold_impl.feature_rules import passenger_groups as pg
 from app.schemas.settings_schema import SpeedConfig
@@ -111,6 +112,11 @@ class EventProcessor:
         revenue = self._normalize_revenue(event)
         pgroup = pg.passenger_group_py(event.passenger_count)
 
+        tip_pct = None
+        if event.tip_amount is not None and event.fare_amount and event.fare_amount > 0:
+            tip_pct = (event.tip_amount / event.fare_amount) * 100
+        cat_gen = gen.categoria_generosidad_py(tip_pct)
+
         return EnrichedRide(
             trip_id=trip_id,
             service_id=event.service_id,
@@ -132,6 +138,19 @@ class EventProcessor:
             revenue=revenue,
             fare_amount=event.fare_amount,
             tolls_amount=event.tolls_amount,
+            tip_amount=event.tip_amount,
+            payment_type_id=event.payment_type_id,
+            trip_distance=event.trip_distance,
+            extra=event.extra,
+            mta_tax=event.mta_tax,
+            total_amount=event.total_amount,
+            base_passenger_fare=event.base_passenger_fare,
+            tips=event.tips,
+            driver_pay=event.driver_pay,
+            trip_miles=event.trip_miles,
+            shared_request_flag=event.shared_request_flag,
+            shared_match_flag=event.shared_match_flag,
+            categoria_generosidad=cat_gen,
         )
 
     def _compute_trip_id(self, event: RideEvent) -> int:
