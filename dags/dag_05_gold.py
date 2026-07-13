@@ -8,28 +8,19 @@ quedan listos antes.
 
 from airflow import DAG
 from airflow.operators.bash import BashOperator
-from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 
-from _common import DEFAULT_ARGS, START_DATE, bash_command
+from _common import DAG_KWARGS, bash_command, trigger_next
 
 with DAG(
     dag_id="dag_05_gold",
-    default_args=DEFAULT_ARGS,
-    schedule=None,
-    start_date=START_DATE,
-    catchup=False,
     tags=["tlc", "gold"],
+    **DAG_KWARGS,
 ) as dag:
     gold_incremental = BashOperator(
         task_id="gold_incremental",
         bash_command=bash_command("--gold incremental"),
     )
 
-    trigger_profiling = TriggerDagRunOperator(
-        task_id="trigger_profiling",
-        trigger_dag_id="dag_06_profiling",
-        wait_for_completion=True,
-        poke_interval=30,
-    )
+    trigger_profiling = trigger_next("trigger_profiling", "dag_06_profiling")
 
     gold_incremental >> trigger_profiling

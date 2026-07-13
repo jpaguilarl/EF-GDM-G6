@@ -18,6 +18,15 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-}
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    # Un commit lento en S3 (LIST/COPY/DELETE sobre un prefijo con throttling)
+    # puede tardar minutos y hacer perder el heartbeat de la task; con el default
+    # de 300s el scheduler la marca zombie, la mata y lanza el retry -> DOS
+    # procesos Spark commiteando al mismo prefijo (la carrera que rompio los
+    # facts). Subir el umbral a 30 min da margen al commit sin dejar de detectar
+    # procesos realmente muertos. job_heartbeat_sec bajo mantiene el latido vivo
+    # durante el commit. Override-ables desde .env si el entorno lo permite.
+    AIRFLOW__SCHEDULER__SCHEDULER_ZOMBIE_TASK_THRESHOLD: ${AIRFLOW__SCHEDULER__SCHEDULER_ZOMBIE_TASK_THRESHOLD:-1800}
+    AIRFLOW__SCHEDULER__JOB_HEARTBEAT_SEC: ${AIRFLOW__SCHEDULER__JOB_HEARTBEAT_SEC:-5}
     # Pasadas tal cual a cada tarea (BashOperator invoca `uv run main.py ...`
     # dentro de este mismo contenedor): app/utils/storage.py y SparkClient las
     # leen de os.environ, nunca de config.yaml.

@@ -8,17 +8,13 @@ run_full_pipeline en main.py). Al terminar, dispara silver quality.
 
 from airflow import DAG
 from airflow.operators.bash import BashOperator
-from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 
-from _common import DEFAULT_ARGS, START_DATE, bash_command
+from _common import DAG_KWARGS, bash_command, trigger_next
 
 with DAG(
     dag_id="dag_01_bronze",
-    default_args=DEFAULT_ARGS,
-    schedule=None,
-    start_date=START_DATE,
-    catchup=False,
     tags=["tlc", "bronze"],
+    **DAG_KWARGS,
 ) as dag:
     bronze_download = BashOperator(
         task_id="bronze_download",
@@ -30,11 +26,8 @@ with DAG(
         bash_command=bash_command(""),
     )
 
-    trigger_silver_quality = TriggerDagRunOperator(
-        task_id="trigger_silver_quality",
-        trigger_dag_id="dag_02_silver_quality",
-        wait_for_completion=True,
-        poke_interval=30,
+    trigger_silver_quality = trigger_next(
+        "trigger_silver_quality", "dag_02_silver_quality"
     )
 
     bronze_download >> bronze_retry >> trigger_silver_quality

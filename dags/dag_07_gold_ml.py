@@ -12,15 +12,12 @@ batch — no correrlas en paralelo (ver AGENTS.md).
 from airflow import DAG
 from airflow.operators.bash import BashOperator
 
-from _common import DEFAULT_ARGS, START_DATE, bash_command
+from _common import DAG_KWARGS, bash_command
 
 with DAG(
     dag_id="dag_07_gold_ml",
-    default_args=DEFAULT_ARGS,
-    schedule=None,
-    start_date=START_DATE,
-    catchup=False,
     tags=["tlc", "gold-ml"],
+    **DAG_KWARGS,
 ) as dag:
     kmodes = BashOperator(
         task_id="gold_ml_kmodes",

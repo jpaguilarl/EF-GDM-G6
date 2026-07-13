@@ -37,7 +37,7 @@ from app.schemas.settings_schema import DatasetsConfig, Module, SettingsSchema
 from app.utils import storage
 from app.utils.globals import globals
 from app.utils.logger import Logger
-from app.utils.spark import SparkClient
+from app.utils.spark import SparkClient, use_default_committer
 
 
 class GoldPipeline:
@@ -64,6 +64,9 @@ class GoldPipeline:
         spark = self.spark_client.get_session()
         # overwrite dinamico: 'overwrite' solo reemplaza las particiones presentes
         spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
+        # El committer S3A magic (activado en SparkClient para silver) es
+        # incompatible con dynamic overwrite; gold vuelve al committer clasico.
+        use_default_committer(spark)
         self.logger.info(
             f"Iniciando capa gold | audit_id={self.audit_id} | modo={self.mode}"
         )

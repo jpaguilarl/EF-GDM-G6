@@ -28,7 +28,7 @@ from app.pipeline.gold.mart_builder import GOLD_DIR, ML_DIR
 from app.utils import storage
 from app.utils.globals import globals
 from app.utils.logger import Logger
-from app.utils.spark import SparkClient
+from app.utils.spark import SparkClient, use_default_committer
 
 # --- Columnas de feature por servicio ---------------------------------------
 YELLOW_GREEN_FEATURES: list[str] = [
@@ -95,6 +95,8 @@ class KModesModelPipeline:
     def run(self) -> int:
         spark = self.spark_client.get_session()
         spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
+        # magic committer (SparkClient) no soporta dynamic overwrite -> clasico
+        use_default_committer(spark)
 
         feature_store_dir = ML_DIR / "ml_feat_kmodes_trips"
         if not feature_store_dir.exists():

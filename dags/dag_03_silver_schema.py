@@ -6,28 +6,21 @@ estas dimensiones. Dependencia dura, documentada en AGENTS.md.
 
 from airflow import DAG
 from airflow.operators.bash import BashOperator
-from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 
-from _common import DEFAULT_ARGS, START_DATE, bash_command
+from _common import DAG_KWARGS, bash_command, trigger_next
 
 with DAG(
     dag_id="dag_03_silver_schema",
-    default_args=DEFAULT_ARGS,
-    schedule=None,
-    start_date=START_DATE,
-    catchup=False,
     tags=["tlc", "silver"],
+    **DAG_KWARGS,
 ) as dag:
     silver_schema = BashOperator(
         task_id="silver_schema",
         bash_command=bash_command("--silver schema"),
     )
 
-    trigger_silver_load = TriggerDagRunOperator(
-        task_id="trigger_silver_load",
-        trigger_dag_id="dag_04_silver_load",
-        wait_for_completion=True,
-        poke_interval=30,
+    trigger_silver_load = trigger_next(
+        "trigger_silver_load", "dag_04_silver_load"
     )
 
     silver_schema >> trigger_silver_load

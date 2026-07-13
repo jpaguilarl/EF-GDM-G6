@@ -9,15 +9,12 @@ quiera reentrenar.
 from airflow import DAG
 from airflow.operators.bash import BashOperator
 
-from _common import DEFAULT_ARGS, START_DATE, bash_command
+from _common import DAG_KWARGS, bash_command
 
 with DAG(
     dag_id="dag_06_profiling",
-    default_args=DEFAULT_ARGS,
-    schedule=None,
-    start_date=START_DATE,
-    catchup=False,
     tags=["tlc", "profiling"],
+    **DAG_KWARGS,
 ) as dag:
     profiling = BashOperator(
         task_id="profiling",

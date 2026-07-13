@@ -34,7 +34,7 @@ from app.pipeline.gold.mart_builder import GOLD_DIR, ML_DIR
 from app.utils import storage
 from app.utils.globals import globals
 from app.utils.logger import Logger
-from app.utils.spark import SparkClient
+from app.utils.spark import SparkClient, use_default_committer
 
 # --- Columnas de entrada y salida ------------------------------------------
 FEATURE_COLS: list[str] = [
@@ -93,6 +93,8 @@ class IsolationForestModelPipeline:
     def run(self) -> int:
         spark = self.spark_client.get_session()
         spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
+        # magic committer (SparkClient) no soporta dynamic overwrite -> clasico
+        use_default_committer(spark)
         spark.conf.set("spark.sql.execution.arrow.pyspark.enabled", "false")
         self.logger.info(
             f"Iniciando Isolation Forest | audit_id={self.audit_id}"

@@ -275,9 +275,13 @@ class StarSchemaBuilder:
             return
 
         # Idempotencia: fact mensual ya construido -> no se recalcula. Se exige
-        # la marca _SUCCESS (commit del job), no la mera existencia del
-        # directorio: un job matado deja el directorio con solo _temporary.
-        # Para reconstruir un mes, borrar su directorio en star/facts.
+        # la marca _SUCCESS (commit del job COMPLETADO), no la mera existencia del
+        # directorio. Un job matado a mitad del commit deja el directorio con
+        # part-*.parquet parciales pero SIN _SUCCESS (local: _temporary huerfano;
+        # S3 con committer magic: __magic o parts sin el POST final del
+        # multipart). Sin este chequeo, "el directorio existe" daria por buena una
+        # particion corrupta y no se reescribiria. Para forzar la reconstruccion
+        # de un mes, borrar su directorio en star/facts (ver comandos de limpieza).
         fact_out = FACTS_DIR / f"fact_{category}_trip" / f"{year}-{month:02d}.parquet"
         if (fact_out / "_SUCCESS").exists():
             self.logger.info(
