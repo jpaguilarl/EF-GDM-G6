@@ -12,6 +12,7 @@ import pytest
 from pyspark.sql import SparkSession
 
 from app.schemas.settings_schema import (
+    StorageConfig,
     AbcXyzConfig,
     DatasetsConfig,
     GenerosityConfig,
@@ -127,14 +128,14 @@ def gold_config() -> GoldConfig:
 
 
 @pytest.fixture(scope="session")
-def settings(datasets_config, gold_config) -> SettingsSchema:
-    return SettingsSchema(datasets=datasets_config, gold=gold_config)
+def settings(storage_config, datasets_config, gold_config) -> SettingsSchema:
+    return SettingsSchema(storage=storage_config, datasets=datasets_config, gold=gold_config)
 
 
 @pytest.fixture(autouse=True)
 def _project_root_patch(monkeypatch: pytest.MonkeyPatch) -> None:
     """Disable Logger file logging by redirecting its log dir to a temp location.
-    
+
     This fixture runs before every test to keep logs from piling up in the real
     logs/ directory. It also sets app.utils.globals.PROJECT_ROOT to None so
     modules that rely on it for I/O must use a specific temp-dir fixture.

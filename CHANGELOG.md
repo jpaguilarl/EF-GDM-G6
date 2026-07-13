@@ -5,6 +5,15 @@ Formato orientado al usuario (equipos de analítica / BI / ML).
 
 ---
 
+## 2026-07-13 - v0.6.0
+
+Initial real-time ingestion (speed) and REST API (serving) layers built on the gold marts.
+
+### Added
+- **Speed layer** (`app/speed/`): real-time event ingestion with `EventProcessor` (4-stage reject rules mirroring silver quality), `ZoneLookup`, `EventBus` pub/sub, and `POST /api/v1/ingest` endpoint — validates, enriches, and publishes `RideEvent` → `EnrichedRide`
+- **Serving layer** (`app/serving/`): FastAPI application with `PolarsQueryEngine` (TTL-cached lazy scans over gold marts), 6 historic data endpoints (`/api/v1/historic/{demand-volume,financial-performance,operational-profile,supply-demand-balance,abc-xyz-zones,tipping-behavior}`), health check, and real-time placeholder
+- **Unit tests** for speed and serving layers: `test_speed_event_processor.py`, `test_speed_ingest.py`, `test_speed_zone_lookup.py`, `test_serving_query_engine.py`, `test_serving_routes.py`
+
 ## 2026-07-12 - v0.5.1
 
 Reducido el ancho del modelo estrella (silver) y los feature stores gold eliminando columnas no utilizadas aguas abajo. Agregadas funciones Python en las reglas de características para inferencia fuera de Spark, configuración de serving/speed, y documentación CLI.
