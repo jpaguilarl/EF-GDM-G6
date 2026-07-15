@@ -34,6 +34,7 @@ speed:
   redis_url: "redis://localhost:6379/0"
   state_ttl_hours: 48
   fraud_score_threshold: -0.1
+  block_minutes: 15
 
 serving:
   host: "0.0.0.0"

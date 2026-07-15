@@ -1,4 +1,5 @@
 from app.schemas.settings_schema import (
+    StorageConfig,
     AbcXyzConfig,
     DatasetsConfig,
     GenerosityConfig,
@@ -84,6 +85,7 @@ def test_kmodes_default():
 
 def test_settings_schema_full():
     cfg = SettingsSchema(
+        storage=StorageConfig(),
         datasets=DatasetsConfig(years=[2025]),
         gold=GoldConfig(
             mode="incremental",
@@ -99,6 +101,6 @@ def test_settings_schema_full():
 
 
 def test_settings_schema_default_gold():
-    cfg = SettingsSchema(datasets=DatasetsConfig(years=[2023]))
+    cfg = SettingsSchema(storage=StorageConfig(), datasets=DatasetsConfig(years=[2023]))
     assert cfg.gold.mode == "full"
     assert cfg.datasets.years == [2023]

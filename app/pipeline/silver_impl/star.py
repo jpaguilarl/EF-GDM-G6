@@ -13,7 +13,7 @@ from pyspark.sql.types import (
     StructType,
 )
 
-from app.pipeline.silver import SilverCleaner
+from app.pipeline.silver_impl.cleaner import SilverCleaner
 from app.schemas.settings_schema import DatasetsConfig, Module
 from app.utils import storage
 from app.utils.globals import globals
@@ -319,9 +319,12 @@ class StarSchemaBuilder:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _read_dim(self, name: str) -> DataFrame:
-        path = storage.for_spark(DIMS_DIR / f"{name}.parquet")
-        return self.spark.read.parquet(path)
+    def _read_dim(self, name: str) -> DataFrame | None:
+        path = DIMS_DIR / f"{name}.parquet"
+        if not path.exists():
+            self.logger.warning(f"  dim {name}: no encontrada, retornando None")
+            return None
+        return self.spark.read.parquet(storage.for_spark(path))
 
     @staticmethod
     def _first_match(df: DataFrame, candidates: list[str]) -> str | None:

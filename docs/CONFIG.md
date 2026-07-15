@@ -49,6 +49,26 @@ gold:
     n_init: 2
     init_method: Cao
     random_state: 42
+
+profiling:
+  rules:
+    nullability:
+      fhvhv:
+        - originating_base_num
+        - on_scene_datetime
+    max_trip_duration_minutes: 1440
+    amount_tolerance: 0.02
+
+speed:
+  redis_url: "redis://localhost:6379/0"
+  state_ttl_hours: 48
+  fraud_score_threshold: -0.1
+  block_minutes: 15
+
+serving:
+  host: "0.0.0.0"
+  port: 8000
+  query_cache_ttl_seconds: 60
 ```
 
 ### `storage` — Backend de almacenamiento
@@ -156,12 +176,37 @@ Hiperparámetros del modelo K-Modes para clustering de perfiles de viaje.
 
 ---
 
-## `profiling.rules` — Reglas de calidad (futuras claves configurables)
+### `speed` — Capa speed (tiempo real)
 
-Actualmente estas reglas están hardcodeadas en `app/profiling/rules/`. Se
-refactorizarán para ser configurables desde `config.yaml` bajo esta sección.
+Configura el motor de procesamiento en tiempo real (Redis + streaming).
 
-Estructura prevista:
+| Campo | Tipo | Default | Descripción |
+|---|---|---|---|
+| `redis_url` | `str` | `"redis://localhost:6379/0"` | URL de conexión a Redis. En Docker Compose se sobreescribe a `redis://redis:6379/0`. |
+| `state_ttl_hours` | `int` | `48` | TTL en horas de las claves de estado en Redis (agregaciones, uniqueness). |
+| `fraud_score_threshold` | `float` | `-0.1` | Umbral del score de Isolation Forest para marcar un viaje como fraudulento. |
+| `block_minutes` | `int` | `15` | Duración de cada bloque horario para agregar viajes en tiempo real (minutos). |
+
+### `serving` — Capa serving (consultas históricas)
+
+Configura el servidor FastAPI para las consultas GET sobre los marts gold.
+
+| Campo | Tipo | Default | Descripción |
+|---|---|---|---|
+| `host` | `str` | `"0.0.0.0"` | Dirección de escucha del servidor FastAPI. |
+| `port` | `int` | `8000` | Puerto de escucha. |
+| `query_cache_ttl_seconds` | `int` | `60` | TTL en segundos del caché de consultas (reduce re-escaneos de parquet). |
+
+---
+
+## `profiling.rules` — Reglas de calidad
+
+Reglas configurables para las 8 dimensiones de calidad en la etapa de profiling
+(`--profile`). Estas reglas también son consumidas por el limpiador Silver para
+determinar qué columnas son opcionales. Cada sub-sección es opcional; si se omite,
+se usan los valores hardcodeados en `app/profiling/rules/`.
+
+Estructura:
 
 ```yaml
 profiling:
@@ -454,6 +499,17 @@ gold:
     max_k: 10
     max_sample_per_service: 50000
     init_method: Huang
+
+speed:
+  redis_url: "redis://redis:6379/0"
+  state_ttl_hours: 48
+  fraud_score_threshold: -0.1
+  block_minutes: 30
+
+serving:
+  host: "0.0.0.0"
+  port: 8000
+  query_cache_ttl_seconds: 120
 ```
 
 ### `.env`
@@ -468,6 +524,8 @@ S3_PREFIX=pipeline
 
 SPARK_DRIVER_MEMORY=12g
 SPARK_MASTER_CORES=12
+SPARK_LOCAL_DIR=/tmp/spark-temp
+REDIS_URL=redis://redis:6379/0
 ```
 
 ---
@@ -477,10 +535,13 @@ SPARK_MASTER_CORES=12
 ### Secciones obligatorias de `config.yaml`
 
 | Sección | ¿Obligatoria? | Default |
-|---|---|---|
+|---|---|---|---|
 | `storage` | Sí | — (campo `backend` default: `"local"`) |
 | `datasets` | Sí | — |
 | `gold` | No | Todos los sub-modelos usan sus defaults |
+| `profiling` | No | Reglas hardcodeadas en `app/profiling/rules/` |
+| `speed` | No | `redis_url: "redis://localhost:6379/0"`, `block_minutes: 15`, etc. |
+| `serving` | No | `host: "0.0.0.0"`, `port: 8000`, etc. |
 
 ### Convenciones
 

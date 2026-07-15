@@ -100,7 +100,11 @@ def get_root() -> Path | S3Path:
         prefix = os.environ.get("S3_PREFIX", "").strip("/")
         uri = f"s3://{bucket}/{prefix}" if prefix else f"s3://{bucket}"
         return S3Path(uri)
-    return LOCAL_PROJECT_ROOT
+    # Ruta a traves de globals.project_root para que los tests puedan
+    # redirectir todo el I/O con monkeypatch.setattr("app.utils.globals.PROJECT_ROOT", tmp_path).
+    # En produccion project_root == LOCAL_PROJECT_ROOT (mismo valor).
+    from app.utils import globals as _globals_module  # lazy import para evitar circular import
+    return _globals_module.globals.project_root
 
 
 def data_path(*parts: str) -> Path | S3Path:

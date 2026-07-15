@@ -5,6 +5,90 @@ Formato orientado al usuario (equipos de analítica / BI / ML).
 
 ---
 
+## 2026-07-13 - v0.7.0
+
+Lambda architecture fully wired end-to-end: historic queries (Polars lazy scans over gold marts) + real-time ingestion (Redis HINCRBY + ML scoring) + merged SSE views. Docker Compose orchestration for serving, Redis, and Jupyter; Airflow DAG for the serving/speed layer; comprehensive architecture documentation; end-to-end integration tests.
+
+### Added
+- **`docker-compose.yml`** — Docker Compose file for serving layer (FastAPI + Redis + optional Jupyter); replaces the need to run `uv run main.py --serve` bare-metal for deployment
+- **`dags/dag_08_serving.py`** — Airflow DAG that starts the FastAPI serving layer (triggered after gold + ML models)
+- **`docs/ARQUITECTURA.md`** — comprehensive Lambda architecture reference covering serving layer, speed layer, SSE streaming, trip_id parity, merge boundary, Redis state model, and component interaction diagrams (418 lines)
+- **`AGENTS.md`** — AI assistant instructions for the project (OpenCode/agentic IDEs)
+- **`.env.example`** — environment variable template for `STORAGE_BACKEND`, AWS credentials, Spark tuning, and Airflow bootstrap
+- **`main.py --serve` / `main.py --speed`** — CLI subcommands to start the serving layer (FastAPI) or speed engine (stdin JSON processing)
+- **Integration tests**: `tests/integration/test_serving_e2e.py` (full serving integration: historic, real-time ingest, SSE streaming, merged views, admin model reload)
+- **Unit tests**: `tests/unit/test_serving_app.py` (FastAPI app initialization and lifespan wiring)
+
+### Changed
+- **Silver executor refactored** (`app/pipeline/silver.py`): `SilverPipeline.run_quality()` now contains the orchestrator logic inline (was delegated to `silver_impl/pipeline.py`); better error collection and abort-on-failure behavior
+- **Gold executor refactored** (`app/pipeline/gold.py`): `GoldPipeline.run()` moved orchestrator logic from `gold_impl/pipeline.py` into the executor; added `--serve`-aware config checks
+- **Removed `app/pipeline/gold_impl/pipeline.py`** and **`app/pipeline/silver_impl/pipeline.py`** — logic migrated into the respective executor modules for simpler architecture
+- **`app/serving/merged_view.py`** — improved Redis hash key handling and deduplication logic
+- **`app/serving/app.py`** — lifespan now wires all speed-layer components (FraudScorer, TripProfiler, RealtimeAggregator) as EventBus subscribers
+- **`app/speed/aggregation.py`** — extended aggregation schemas for all 6 mart-compatible Redis keys
+- **`app/speed/schema.py`** — added `categoria_generosidad` and `service_type` fields to `EnrichedRide`
+- **`docs/CLI.md`** — added `--serve` and `--speed` commands; Docker Compose and Airflow deployment sections
+- **`docs/CONFIG.md`** — added `SpeedConfig` and `ServingConfig` sections; Docker/Airflow configuration reference
+- **`config.yaml`** — added `serving:` and `speed:` configuration sections
+- **`app/schemas/settings_schema.py`** — added `SpeedConfig` and `ServingConfig` Pydantic models
+
+### Fixed
+- **`app/speed/event_processor.py`** — null-safe enrichment of `categoria_generosidad` and improved rejection rule logging
+- **`app/speed/ingest.py`** — consistent error response format for validation failures
+- **`tests/spark/test_gold_dimensions.py`** and **`tests/spark/test_gold_marts.py`** — minor test fixture alignment
+
+## 2026-07-13 - v0.6.2
+
+Real-time SSE endpoint merges historic + live Redis data across all 6 marts; ML models (IsolationForest fraud scoring, KModes trip profiling) run as EventBus subscribers on every ingested ride.
+
+### Added
+- **SSE streaming endpoints** (`/api/v1/realtime/{demand-volume,financial-performance,operational-profile,supply-demand,tipping,abc-xyz}/stream`) — Server-Sent Events that push an initial snapshot (historic + Redis) followed by live increments via EventBus subscription; includes heartbeat keep-alive, client-side filtering (service_id, zone, borough, etc.), and automatic unsubscribe on disconnect
+- **MergedViewReader** (`app/serving/merged_view.py`) — merges Polars historic data with real-time Redis hashes from all 6 marts, deduplicating on natural keys; exposes `read_merged()` (batch) and `get_realtime_row()` (single ride)
+- **FraudScorer** (`app/speed/fraud_scorer.py`) — EventBus subscriber that computes 6 features per ride (speed, cost-per-mile, toll ratio, etc.), scores via IsolationForest per RatecodeID, and stores `anomaly_score`/`is_fraud` in Redis + publishes to `rt:fraud_events` pub/sub channel
+- **TripProfiler** (`app/speed/trip_profiler.py`) — EventBus subscriber that extracts categorical features (borough, franja_horaria, payment_type, etc.), encodes via KModes category mappings, predicts cluster_id, and stores it in Redis
+- **ModelLoader** (`app/speed/ml_state.py`) — loads IsolationForest models (per RatecodeID) and KModes models (per service) with joblib, plus KModes category mappings from JSON; hot-reloadable via admin endpoint
+- **Admin endpoint** `POST /api/v1/admin/reload-models` — re-scans `data/gold/models/` and hot-reloads all ML models into the running FastAPI process
+- **New dependency**: `sse-starlette>=2.2.0` for SSE StreamingResponse
+- **GET merged endpoints** (`/api/v1/realtime/*`) — return historic + real-time merged rows with filter/limit support
+- **Unit tests**: `test_serving_merged_view.py` (5 tests), `test_serving_sse.py` (7 tests), `test_speed_fraud_scorer.py` (7 tests), `test_speed_model_loader.py` (3 tests), `test_speed_trip_profiler.py` (5 tests)
+
+### Changed
+- `app/serving/app.py` — FastAPI lifespan wires up `RedisClient`, `EventBus`, `EventProcessor`, `FraudScorer`, `TripProfiler`, `ModelLoader`, and `MergedViewReader`; includes `ingest` and `admin` routers
+- `app/serving/routes/realtime.py` — extended from placeholder to full implementation with 6 merged endpoints + 6 SSE streaming endpoints
+- `app/speed/schema.py` — `EnrichedRide` extended with fields required by fraud scorer and trip profiler
+- `app/speed/pubsub.py` — added `unsubscribe()` method for SSE cleanup on disconnect
+- `pyproject.toml` — added `sse-starlette` serving dependency, `pytest-asyncio` asyncio_mode = auto for SSE tests
+
+## 2026-07-13 - v0.6.1
+
+Real-time aggregation over Redis (speed view) — EventBus subscriber maintains rolling 6-mart state with 48h TTL.
+
+### Added
+- **`app/speed/redis_client.py`**: async Redis client factory with configurable TTL, singleton pattern for FastAPI
+- **`app/speed/aggregation.py`**: `RealtimeAggregator` — EventBus subscriber that updates 6 mart schemas via Redis `HINCRBY`/`HINCRBYFLOAT` pipelines:
+  - `demand_volume`: `viajes` per `{service}:{date}:{hour}:{zone}`
+  - `financial_performance`: fare component SUMs per service type (yellow/green vs fhvhv)
+  - `operational_profile`: duration, distance, shared-request/match counters
+  - `supply_demand_balance`: `entrantes`/`salientes` per location × 15-min block
+  - `tipping_behavior`: tip aggregates by borough × payment type × generosity category
+  - `uniqueness` guard: SETNX on `trip_id` prevents double-counting duplicate events
+- **EnrichedRide schema**: 14 new pass-through fields (`tip_amount`, `payment_type_id`, `trip_distance`, `extra`, `mta_tax`, `total_amount`, `base_passenger_fare`, `tips`, `driver_pay`, `trip_miles`, `shared_request_flag`, `shared_match_flag`, `categoria_generosidad`) and `categoria_generosidad` enrichment in `EventProcessor._enrich()`
+- **Unit tests**: `test_speed_aggregation.py` (13 tests) + `test_speed_redis_keys.py` (12 tests) using fakeredis async
+
+### Changed
+- `app/speed/schema.py` — `EnrichedRide` extended with all fields required by the 6 mart aggregations
+- `app/speed/event_processor.py` — computes `categoria_generosidad` from `tip_amount`/`fare_amount`; passes through all RideEvent fields to EnrichedRide
+- `pyproject.toml` — added `fakeredis[lua]`, `pytest-asyncio` dev dependencies; enabled `asyncio_mode = auto`
+
+## 2026-07-13 - v0.6.0
+
+Initial real-time ingestion (speed) and REST API (serving) layers built on the gold marts.
+
+### Added
+- **Speed layer** (`app/speed/`): real-time event ingestion with `EventProcessor` (4-stage reject rules mirroring silver quality), `ZoneLookup`, `EventBus` pub/sub, and `POST /api/v1/ingest` endpoint — validates, enriches, and publishes `RideEvent` → `EnrichedRide`
+- **Serving layer** (`app/serving/`): FastAPI application with `PolarsQueryEngine` (TTL-cached lazy scans over gold marts), 6 historic data endpoints (`/api/v1/historic/{demand-volume,financial-performance,operational-profile,supply-demand-balance,abc-xyz-zones,tipping-behavior}`), health check, and real-time placeholder
+- **Unit tests** for speed and serving layers: `test_speed_event_processor.py`, `test_speed_ingest.py`, `test_speed_zone_lookup.py`, `test_serving_query_engine.py`, `test_serving_routes.py`
+
 ## 2026-07-12 - v0.5.1
 
 Reducido el ancho del modelo estrella (silver) y los feature stores gold eliminando columnas no utilizadas aguas abajo. Agregadas funciones Python en las reglas de características para inferencia fuera de Spark, configuración de serving/speed, y documentación CLI.
