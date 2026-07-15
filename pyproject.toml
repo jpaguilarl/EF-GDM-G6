@@ -33,6 +33,15 @@ s3 = [
 jupyter = [
     "jupyterlab>=4.2.0",
 ]
+# Capa serving (FastAPI + Speed): expone marts gold via HTTP/SSE y procesa en
+# tiempo real viajes individuales (Redis + xxhash para parity con Spark).
+# Instalar con: uv sync --extra serving
+serving = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "redis>=5.2.0",
+    "xxhash>=3.5.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -40,4 +49,9 @@ addopts = "-ra --strict-markers"
 markers = [
   "integration: end-to-end pipeline runs (slower)",
   "spark: requires a real SparkSession",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
 ]

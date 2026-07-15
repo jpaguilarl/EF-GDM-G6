@@ -15,11 +15,11 @@ from pyspark.sql import Row
 
 
 def _patch_isolation_forest(monkeypatch, tmp_gold, tmp_ml):
-    import app.pipeline.gold.mart_builder as mb
+    import app.pipeline.gold_impl.mart_builder as mb
     monkeypatch.setattr(mb, "ML_DIR", tmp_ml)
     monkeypatch.setattr(mb, "GOLD_DIR", tmp_gold)
 
-    import app.pipeline.gold.ml.isolation_forest_model as m
+    import app.pipeline.gold_impl.ml.isolation_forest_model as m
     monkeypatch.setattr(m, "ML_DIR", tmp_ml)
     monkeypatch.setattr(m, "GOLD_DIR", tmp_gold)
     monkeypatch.setattr(m, "SCORES_DIR", tmp_ml / "ml_isolation_fraud_scores")
@@ -32,7 +32,7 @@ def test_isolation_forest_normal_training(spark, settings, monkeypatch, tmp_path
     tmp_ml.mkdir(parents=True)
     _patch_isolation_forest(monkeypatch, tmp_gold, tmp_ml)
 
-    from app.pipeline.gold.ml.isolation_forest_model import (
+    from app.pipeline.gold_impl.ml.isolation_forest_model import (
         IsolationForestModelPipeline,
     )
 
@@ -93,7 +93,7 @@ def test_isolation_forest_missing_feature_store(monkeypatch, settings, tmp_path)
     tmp_ml = tmp_gold / "ml"
     _patch_isolation_forest(monkeypatch, tmp_gold, tmp_ml)
 
-    from app.pipeline.gold.ml.isolation_forest_model import IsolationForestModelPipeline
+    from app.pipeline.gold_impl.ml.isolation_forest_model import IsolationForestModelPipeline
 
     pipeline = IsolationForestModelPipeline(settings)
     result = pipeline.run()
@@ -106,7 +106,7 @@ def test_isolation_forest_low_rows_skipped(spark, settings, monkeypatch, tmp_pat
     tmp_ml.mkdir(parents=True)
     _patch_isolation_forest(monkeypatch, tmp_gold, tmp_ml)
 
-    from app.pipeline.gold.ml.isolation_forest_model import (
+    from app.pipeline.gold_impl.ml.isolation_forest_model import (
         IsolationForestModelPipeline,
     )
 
@@ -167,7 +167,7 @@ def test_isolation_forest_low_rows_skipped(spark, settings, monkeypatch, tmp_pat
 def test_make_train_score_fn_picklable():
     from pyspark.cloudpickle import cloudpickle
 
-    from app.pipeline.gold.ml.isolation_forest_model import _make_train_score_fn
+    from app.pipeline.gold_impl.ml.isolation_forest_model import _make_train_score_fn
 
     fn = _make_train_score_fn(10, 0.05, 10, "auto", 42)
     data = cloudpickle.dumps(fn)
@@ -181,7 +181,7 @@ def test_isolation_forest_output_schema(spark, settings, monkeypatch, tmp_path):
     tmp_ml.mkdir(parents=True)
     _patch_isolation_forest(monkeypatch, tmp_gold, tmp_ml)
 
-    from app.pipeline.gold.ml.isolation_forest_model import (
+    from app.pipeline.gold_impl.ml.isolation_forest_model import (
         OUTPUT_SCHEMA,
         IsolationForestModelPipeline,
     )
@@ -224,11 +224,11 @@ def test_isolation_forest_output_schema(spark, settings, monkeypatch, tmp_path):
 
 
 def _patch_kmodes(monkeypatch, tmp_gold, tmp_ml):
-    import app.pipeline.gold.mart_builder as mb
+    import app.pipeline.gold_impl.mart_builder as mb
     monkeypatch.setattr(mb, "ML_DIR", tmp_ml)
     monkeypatch.setattr(mb, "GOLD_DIR", tmp_gold)
 
-    import app.pipeline.gold.ml.kmodes_model as m
+    import app.pipeline.gold_impl.ml.kmodes_model as m
     monkeypatch.setattr(m, "ML_DIR", tmp_ml)
     monkeypatch.setattr(m, "GOLD_DIR", tmp_gold)
     monkeypatch.setattr(m, "KMODELS_DIR", tmp_ml / "kmodes_model")
@@ -287,7 +287,7 @@ def test_kmodes_normal_training(spark, settings, monkeypatch, tmp_path):
     tmp_ml.mkdir(parents=True)
     _patch_kmodes(monkeypatch, tmp_gold, tmp_ml)
 
-    from app.pipeline.gold.ml.kmodes_model import KModesModelPipeline
+    from app.pipeline.gold_impl.ml.kmodes_model import KModesModelPipeline
 
     rng = np.random.default_rng(42)
     rows = _kmodes_rows(rng, 60, 40)
@@ -314,7 +314,7 @@ def test_kmodes_missing_feature_store(monkeypatch, settings, tmp_path):
     tmp_ml = tmp_gold / "ml"
     _patch_kmodes(monkeypatch, tmp_gold, tmp_ml)
 
-    from app.pipeline.gold.ml.kmodes_model import KModesModelPipeline
+    from app.pipeline.gold_impl.ml.kmodes_model import KModesModelPipeline
 
     pipeline = KModesModelPipeline(settings)
     result = pipeline.run()
@@ -322,7 +322,7 @@ def test_kmodes_missing_feature_store(monkeypatch, settings, tmp_path):
 
 
 def test_matching_dissim():
-    from app.pipeline.gold.ml.kmodes_model import _matching_dissim
+    from app.pipeline.gold_impl.ml.kmodes_model import _matching_dissim
 
     a = np.array([0, 1, 2])
     b = np.array([0, 1, 2])
@@ -343,7 +343,7 @@ def test_kmodes_output_parquet_structure(spark, settings, monkeypatch, tmp_path)
     tmp_ml.mkdir(parents=True)
     _patch_kmodes(monkeypatch, tmp_gold, tmp_ml)
 
-    from app.pipeline.gold.ml.kmodes_model import KModesModelPipeline
+    from app.pipeline.gold_impl.ml.kmodes_model import KModesModelPipeline
 
     rng = np.random.default_rng(42)
     rows = _kmodes_rows(rng, 60, 40)
@@ -375,11 +375,11 @@ def test_kmodes_output_parquet_structure(spark, settings, monkeypatch, tmp_path)
 
 
 def _patch_sarimax(monkeypatch, tmp_gold, tmp_ml):
-    import app.pipeline.gold.mart_builder as mb
+    import app.pipeline.gold_impl.mart_builder as mb
     monkeypatch.setattr(mb, "ML_DIR", tmp_ml)
     monkeypatch.setattr(mb, "GOLD_DIR", tmp_gold)
 
-    import app.pipeline.gold.ml.sarimax_model as m
+    import app.pipeline.gold_impl.ml.sarimax_model as m
     monkeypatch.setattr(m, "ML_DIR", tmp_ml)
     monkeypatch.setattr(m, "GOLD_DIR", tmp_gold)
     monkeypatch.setattr(m, "FORECAST_DIR", tmp_ml / "ml_sarimax_trips_forecast")
@@ -408,7 +408,7 @@ def test_sarimax_normal_training(spark, settings, monkeypatch, tmp_path):
     tmp_ml.mkdir(parents=True)
     _patch_sarimax(monkeypatch, tmp_gold, tmp_ml)
 
-    from app.pipeline.gold.ml.sarimax_model import SariMaxModelPipeline
+    from app.pipeline.gold_impl.ml.sarimax_model import SariMaxModelPipeline
 
     rows = _sarimax_rows(100, "Manhattan", "yellow")
     rows.extend(_sarimax_rows(50, "Brooklyn", "green"))
@@ -431,7 +431,7 @@ def test_sarimax_missing_feature_store(monkeypatch, settings, tmp_path):
     tmp_ml = tmp_gold / "ml"
     _patch_sarimax(monkeypatch, tmp_gold, tmp_ml)
 
-    from app.pipeline.gold.ml.sarimax_model import SariMaxModelPipeline
+    from app.pipeline.gold_impl.ml.sarimax_model import SariMaxModelPipeline
 
     pipeline = SariMaxModelPipeline(settings)
     result = pipeline.run()
@@ -444,7 +444,7 @@ def test_sarimax_low_rows_skipped(spark, settings, monkeypatch, tmp_path):
     tmp_ml.mkdir(parents=True)
     _patch_sarimax(monkeypatch, tmp_gold, tmp_ml)
 
-    from app.pipeline.gold.ml.sarimax_model import SariMaxModelPipeline
+    from app.pipeline.gold_impl.ml.sarimax_model import SariMaxModelPipeline
 
     rows = _sarimax_rows(5, "Manhattan", "yellow")
 
@@ -464,7 +464,7 @@ def test_sarimax_low_rows_skipped(spark, settings, monkeypatch, tmp_path):
 
 
 def test_compute_exog_from_timestamps():
-    from app.pipeline.gold.ml.sarimax_model import _compute_exog_from_timestamps
+    from app.pipeline.gold_impl.ml.sarimax_model import _compute_exog_from_timestamps
 
     timestamps = pd.date_range("2024-01-01", periods=168, freq="h")
     result = _compute_exog_from_timestamps(timestamps, "Manhattan")
@@ -508,7 +508,7 @@ def test_sarimax_fallback_order(spark, settings, monkeypatch, tmp_path):
     tmp_ml.mkdir(parents=True)
     _patch_sarimax(monkeypatch, tmp_gold, tmp_ml)
 
-    from app.pipeline.gold.ml.sarimax_model import SariMaxModelPipeline
+    from app.pipeline.gold_impl.ml.sarimax_model import SariMaxModelPipeline
 
     rows = _sarimax_rows(15, "Manhattan", "yellow")
 

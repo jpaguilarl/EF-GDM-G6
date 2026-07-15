@@ -6,8 +6,8 @@ from pathlib import Path
 import httpx
 import polars as pl
 
-from app.utils import storage
 from app.utils.logger import Logger
+from app.utils import storage
 
 
 class DownloadClient:

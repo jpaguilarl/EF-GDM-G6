@@ -24,7 +24,7 @@ from pyspark.sql import functions as F
 from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 from sklearn.metrics import silhouette_score
 
-from app.pipeline.gold.mart_builder import GOLD_DIR, ML_DIR
+from app.pipeline.gold_impl.mart_builder import GOLD_DIR, ML_DIR
 from app.utils import storage
 from app.utils.globals import globals
 from app.utils.logger import Logger

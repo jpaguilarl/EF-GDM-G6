@@ -9,8 +9,8 @@ El detalle por viaje permanece integro en silver/star/facts.
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 
-from app.pipeline.gold.feature_rules import time_blocks as tb
-from app.pipeline.gold.mart_builder import (
+from app.pipeline.gold_impl.feature_rules import time_blocks as tb
+from app.pipeline.gold_impl.mart_builder import (
     PU_LOC,
     GoldContext,
     TripGrainMart,

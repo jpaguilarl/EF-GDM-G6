@@ -5,6 +5,51 @@ Formato orientado al usuario (equipos de analítica / BI / ML).
 
 ---
 
+## 2026-07-12 - v0.5.1
+
+Reducido el ancho del modelo estrella (silver) y los feature stores gold eliminando columnas no utilizadas aguas abajo. Agregadas funciones Python en las reglas de características para inferencia fuera de Spark, configuración de serving/speed, y documentación CLI.
+
+### Added
+- Python-accessible helper functions (`*_py`) en `time_blocks.py`, `generosity.py`, `passenger_groups.py`, `ratecode_tariff.py` — para uso en inferencia/serving fuera de Spark (FastAPI)
+- `SpeedConfig` y `ServingConfig` Pydantic schemas en `settings_schema.py` con secciones `speed:` y `serving:` en `config.yaml`
+- `serving` optional dependency extra en `pyproject.toml` (`fastapi`, `uvicorn`, `redis`, `xxhash`)
+- `docs/CLI.md` — documentación de referencia completa del CLI
+
+### Changed
+- **Star schema**: eliminadas columnas redundantes de facts (`store_and_fwd_flag`, `dispatching_base_num`, `originating_base_num`, `trip_time`, `trip_type`, `SR_Flag`, `shared_match_flag`, `access_a_ride_flag`, `wav_request_flag`, `wav_match_flag`)
+- **Gold dimensions**: selects acotados en `dim_date_gold` y `dim_zone_gold`; agregada columna `is_weekend`
+- **ARIMA features**: eliminadas `hour_of_day`, `dow`, `is_weekend`, `is_holiday` del store (ningún consumidor las lee)
+- **Isolation fraud features**: reducidas columnas (`date_key`, `ratecode_name`, pickup/dropoff timestamps, `tolls_amount`, `improvement_surcharge`, `desviacion_tarifa_teorica`)
+- **KModes features**: eliminadas `date_key`, `pu_location_id`, `do_location_id`, `vendor_id`
+
+### Removed
+- `dim_vendor` y `dim_service` del star schema (no utilizadas por gold ni los dashboards)
+
+## 2026-07-12 - 09d8c6d
+
+Silver cleaner refactored to reject-only (no imputation, no clamping, no recomputation). Gold implementation moved to `gold_impl/` package. Settings refactored to singleton. New config reference docs and optional dependency extras.
+
+### Added
+- `docs/config_reference.md` — comprehensive reference for `config.yaml`, `.env`, profiling rules, gold feature rules, and Spark/Airflow configuration
+- Optional dependency extras in `pyproject.toml`: `s3` (s3fs for S3 storage backend) and `jupyter` (jupyterlab for docker-compose)
+- Storage abstraction utilities (`app.utils.storage`) for unified local/S3 path handling
+- New test cases verifying reject-only behavior: null required columns reject, nullable columns pass through, no imputation, no clamping, no total_amount recomputation
+
+### Changed
+- **Silver cleaner refactored to reject-only**: removed all fix/imputation phases — no clamping of `trip_distance`/`passenger_count`, no `total_amount` recomputation, no default imputation of nulls. Silver now only rejects invalid rows; source values pass through unchanged.
+- **Expanded `NULLABLE_COLUMNS`** across all categories: yellow/green now include `RatecodeID`, `store_and_fwd_flag`, `payment_type`, `tip_amount`, `tolls_amount`, `extra`, `mta_tax`, `improvement_surcharge`; fhv adds `Affiliated_base_number`; fhvhv adds `request_datetime`, `tolls`, `bcf`, `sales_tax`, `congestion_surcharge`, `airport_fee`, `cbd_congestion_fee`, `tips`
+- **Gold implementation moved** from `app/pipeline/gold/` to `app/pipeline/gold_impl/`
+- **Star schema builder moved** from `app/pipeline/star.py` to `app/pipeline/silver_impl/star.py`
+- **Settings refactored** to singleton pattern (`settings` instance, removed `.config` accessor)
+- **`main.py` simplified** — removed unused imports, uses storage abstraction
+- **Tests updated** — silver cleaner tests verify reject-only behavior (no imputation, no clamping, no recomputation); NULLABLE_COLUMNS tests expanded for all categories
+
+### Removed
+- Fix/imputation phase from SilverCleaner: no more clamping of `trip_distance`/`passenger_count`, no `total_amount` recomputation, no default imputation of nulls
+
+### Fixed
+- **`pyproject.toml`** — added missing optional dependency extras (`s3`, `jupyter`) for S3 storage backend and Jupyter service
+
 ## [0.4.1] — 2026-07-10 — Resiliencia OOM y dependencias en Docker
 
 ### 🐛 Correcciones

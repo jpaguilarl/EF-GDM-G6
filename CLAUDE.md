@@ -63,7 +63,7 @@ No linter, formatter, or CI is configured.
 Python 3.12, managed with **uv** (`uv.lock`). Key split to keep in mind:
 
 - **Polars** — used by `DownloadClient` and all audit-trail writes (`data/*/audit.parquet`).
-- **PySpark** — used by everything in `app/profiling/`, `app/pipeline/silver.py` + `star.py`, and the whole
+- **PySpark** — used by everything in `app/profiling/`, `app/pipeline/silver/` + `star.py`, and the whole
   `app/pipeline/gold/` package.
 - **pyarrow** — parquet metadata (row counts, footer validation) in the download client.
 - **scikit-learn / kmodes / statsmodels / joblib** — the `--gold-ml` model pipelines (pandas-side, not Spark).
@@ -80,7 +80,7 @@ per-layer mixing, no code duplicated between backends. The abstraction is intent
   reading `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_REGION` from the environment — **never**
   from `config.yaml`). `app/utils/globals.py`'s `project_root` property routes through this, so the
   existing `globals.project_root / "data/silver/stage" / category`-style composition used
-  throughout `silver.py`/`star.py`/`mart_builder.py`/`gold_pipeline.py` keeps working unchanged for
+  throughout `silver_impl/`/`star.py`/`gold_impl/mart_builder.py`/`gold_impl/pipeline.py` keeps working unchanged for
   both backends — only the root changes, not the call sites.
 - **`storage.for_spark(path)`** — Spark/hadoop-aws needs the `s3a://` scheme; Polars/pyarrow/pandas/
   s3fs need `s3://`. Every `spark.read.parquet(...)`/`...write...parquet(...)` call site wraps its
@@ -118,7 +118,7 @@ per-layer mixing, no code duplicated between backends. The abstraction is intent
    `Reporter` writes per-dataset JSON to `data/profiling/{category}/{year}-{month:02d}.json` plus a summary
    `index.html` (reports sorted for stable output).
 
-3. **Silver quality** (`SilverCleaner` in `app/pipeline/silver.py`) — two-phase per file:
+3. **Silver quality** (`SilverCleaner` in `app/pipeline/silver/cleaner.py`) — two-phase per file:
    - **Reject phase** adds a `_reject_reason` column (timeliness off-period, inverted/over-24h datetimes,
      integrity vs. zone IDs, uniqueness duplicates). First failing rule wins (`& ~already`). Helper columns
      `_pickup_dt`/`_dropoff_dt` are dropped **before** the persist (2 extra timestamp columns ≈ 320MB cached

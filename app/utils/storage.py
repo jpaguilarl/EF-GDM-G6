@@ -12,6 +12,7 @@ reescribirse.
 
 import os
 from pathlib import Path, PurePosixPath
+from app.utils.settings import settings
 
 LOCAL_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -90,7 +91,7 @@ class S3Path:
 
 
 def get_backend() -> str:
-    return os.environ.get("STORAGE_BACKEND", "local").strip().lower()
+    return settings.storage.backend
 
 
 def get_root() -> Path | S3Path:

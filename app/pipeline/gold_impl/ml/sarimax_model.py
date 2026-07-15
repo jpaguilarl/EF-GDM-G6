@@ -29,8 +29,8 @@ from pyspark.sql.types import (
 )
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 
-from app.pipeline.gold.dims.gold_dimensions import HOLIDAY_DATE_KEYS
-from app.pipeline.gold.mart_builder import GOLD_DIR, ML_DIR
+from app.pipeline.gold_impl.dims.gold_dimensions import HOLIDAY_DATE_KEYS
+from app.pipeline.gold_impl.mart_builder import GOLD_DIR, ML_DIR
 from app.utils import storage
 from app.utils.logger import Logger
 from app.utils.spark import SparkClient, use_default_committer

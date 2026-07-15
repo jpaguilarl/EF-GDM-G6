@@ -8,9 +8,9 @@ tratarse como categorias nominales.
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 
-from app.pipeline.gold.feature_rules import passenger_groups as pg
-from app.pipeline.gold.feature_rules import time_blocks as tb
-from app.pipeline.gold.mart_builder import (
+from app.pipeline.gold_impl.feature_rules import passenger_groups as pg
+from app.pipeline.gold_impl.feature_rules import time_blocks as tb
+from app.pipeline.gold_impl.mart_builder import (
     DO_LOC,
     PU_LOC,
     SILVER_DIMS_DIR,
@@ -55,15 +55,11 @@ class KModesFeatures(TripGrainMart):
         base_cols = {
             "trip_id": F.col("trip_id"),
             "service_id": F.lit(category),
-            "date_key": F.col("date_key"),
-            "pu_location_id": col_or_null(fact, PU_LOC, "int").cast("string"),
-            "do_location_id": col_or_null(fact, DO_LOC, "int").cast("string"),
             "borough_pu": F.col("pu_borough"),
             "borough_do": F.col("do_borough"),
             "franja_horaria": tb.franja_horaria(hour),
             "dia_categoria": tb.dia_categoria(dow),
             "hvfhs_license_num": col_or_null(fact, "hvfhs_license_num", "string"),
-            "vendor_id": col_or_null(fact, "vendor_id", "int").cast("string"),
             "year": F.lit(year),
             "month": F.lit(month),
         }

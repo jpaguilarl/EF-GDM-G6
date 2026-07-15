@@ -15,9 +15,9 @@ from pyspark.sql.types import (
     StructType,
 )
 
-from app.pipeline.gold.feature_rules import ratecode_tariff as rt
-from app.pipeline.gold.feature_rules import time_blocks as tb
-from app.pipeline.gold.mart_builder import GOLD_DIMS_DIR, SILVER_DIMS_DIR
+from app.pipeline.gold_impl.feature_rules import ratecode_tariff as rt
+from app.pipeline.gold_impl.feature_rules import time_blocks as tb
+from app.pipeline.gold_impl.mart_builder import GOLD_DIMS_DIR, SILVER_DIMS_DIR
 from app.utils import storage
 from app.utils.logger import Logger
 
@@ -62,7 +62,9 @@ class GoldDimensionsBuilder:
     def _build_dim_date_gold(self) -> DataFrame:
         src = SILVER_DIMS_DIR / "dim_date.parquet"
         df = self.spark.read.parquet(storage.for_spark(src))
+        df = df.select("date_key", "date", "weekday")
         df = df.withColumn("dia_categoria", tb.dia_categoria(F.col("weekday")))
+        df = df.withColumn("is_weekend", F.col("weekday") >= 6)
         df = df.withColumn(
             "is_holiday", F.col("date_key").isin(list(HOLIDAY_DATE_KEYS))
         )
@@ -73,6 +75,7 @@ class GoldDimensionsBuilder:
     def _build_dim_zone_gold(self) -> DataFrame:
         src = SILVER_DIMS_DIR / "dim_zone.parquet"
         df = self.spark.read.parquet(storage.for_spark(src))
+        df = df.select("LocationID", "Borough", "Zone")
 
         borough_es = F.col("Borough")
         for eng, es in BOROUGH_ES.items():

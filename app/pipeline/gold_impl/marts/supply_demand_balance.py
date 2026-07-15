@@ -10,7 +10,7 @@ donde entrantes = dropoffs hacia z en t, salientes = pickups desde z en t+1.
 from pyspark.sql import functions as F
 from pyspark.storagelevel import StorageLevel
 
-from app.pipeline.gold.mart_builder import (
+from app.pipeline.gold_impl.mart_builder import (
     GoldBuilder,
     GoldContext,
 )

@@ -46,14 +46,14 @@ Interrupted runs resume by relaunching the same command.
 | `app.profiling.dataset_profiler` | `DatasetProfiler` | Runs one check per dimension class in `app/profiling/dimensions/` per file (df persisted once, unpersisted after) |
 | `app.profiling.dimensions` | `BaseDimension` + 8 subcls | accuracy, completeness, consistency, integrity, reasonableness, timeliness, uniqueness, validity |
 | `app.profiling.reporter` | `Reporter` | Writes JSON + `index.html` to `data/profiling/` |
-| `app.pipeline.silver` | `SilverPipeline`, `SilverCleaner` | Quality clean (reject + fix), 2 files in parallel + audit lock |
+| `app.pipeline.silver` (executor) | `SilverPipeline` (entry), `SilverCleaner` | Quality clean (reject + fix), 2 files in parallel + audit lock. Executor: `app/pipeline/silver.py`; impl: `app/pipeline/silver_impl/` |
 | `app.pipeline.star` | `StarSchemaBuilder` | Star dims + facts (3 facts in parallel; facts carry `trip_id` + std timestamps) |
-| `app.pipeline.gold.gold_pipeline` | `GoldPipeline` | Gold orchestrator: 6 marts + 3 ML feature stores |
-| `app.pipeline.gold.mart_builder` | `GoldBuilder`, `TripGrainMart`, `GoldContext` | Builder bases + shared context (`get_union_facts()` lazy union) |
-| `app.pipeline.gold.dims.gold_dimensions` | `GoldDimensionsBuilder` | `dim_date_gold`, `dim_zone_gold`, `dim_ratecode_theoretical` |
-| `app.pipeline.gold.ml.isolation_forest_model` | `IsolationForestModelPipeline` | Trains sklearn IsolationForest per RatecodeID, writes scores + `model.joblib` |
-| `app.pipeline.gold.ml.kmodes_model` | `KModesModelPipeline` | Trains KModes per service, elbow+silhouette tuning, writes labels + centroids + profiles |
-| `app.pipeline.gold.ml.sarimax_model` | `SariMaxModelPipeline` | Trains SARIMAX trip-count forecaster per borough × service_id |
+| `app.pipeline.gold` (executor) | `GoldPipeline` (entry) | Gold orchestrator: 6 marts + 3 ML feature stores. Executor: `app/pipeline/gold.py`; impl: `app/pipeline/gold_impl/` |
+| `app.pipeline.gold_impl.mart_builder` | `GoldBuilder`, `TripGrainMart`, `GoldContext` | Builder bases + shared context (`get_union_facts()` lazy union) |
+| `app.pipeline.gold_impl.dims.gold_dimensions` | `GoldDimensionsBuilder` | `dim_date_gold`, `dim_zone_gold`, `dim_ratecode_theoretical` |
+| `app.pipeline.gold_impl.ml.isolation_forest_model` | `IsolationForestModelPipeline` | Trains sklearn IsolationForest per RatecodeID, writes scores + `model.joblib` |
+| `app.pipeline.gold_impl.ml.kmodes_model` | `KModesModelPipeline` | Trains KModes per service, elbow+silhouette tuning, writes labels + centroids + profiles |
+| `app.pipeline.gold_impl.ml.sarimax_model` | `SariMaxModelPipeline` | Trains SARIMAX trip-count forecaster per borough × service_id |
 | `app.utils.settings` | `Settings` | Loads `config.yaml` → `SettingsSchema` (pydantic) |
 | `app.utils.spark` | `SparkClient`, `target_files()` | PySpark session (`local[6]`, 6g, AQE) + coalesce sizing helper |
 | `app.utils.storage` | `get_root()`, `get_backend()`, `for_spark()`, `S3Path` | Storage abstraction: local `Path` or S3 (`s3fs`), toggled by `STORAGE_BACKEND` |
@@ -74,12 +74,17 @@ Interrupted runs resume by relaunching the same command.
   **dynamic concurrency** (1 worker for heavy files like fhvhv/yellow, 3 workers for green/fhv); each df is persisted once so the 8 dimensions
   don't re-read the parquet. Do **not** call `catalog.clearCache()` between profiles (global —
   would evict concurrent profiles). Existing JSONs are reloaded, not recomputed.
-- **SilverPipeline / SilverCleaner** — two-phase clean (reject then fix). First failing reject rule wins
-  (`& ~already`); fix phase runs only on non-rejected rows. `_pickup_dt`/`_dropoff_dt` helpers are dropped
-  **before** the persist. Accuracy (= recompute `total_amount` from components) is **skipped for fhvhv** so
-  its `driver_pay` stays intact (gold needs the original value for `margen_plataforma` /
-  `ratio_pago_conductor`). Uses **dynamic concurrency** (1 worker for fhvhv/yellow to avoid OOM, 2 for green/fhv), one `SilverCleaner` per worker, audit writes behind `_audit_lock`. Skips months already in
-  `stage/`; collected failures re-raise at the end (fail loud). `--silver quality` reads `data/bronze/`;
+- **SilverPipeline / SilverCleaner** — reject-only filter (no fix/imputation phase). Discards rows that
+  are **incomplete** (null in a required column) or **factually incorrect** (pickup date outside the file's
+  month, dropoff before pickup, zone ID not in lookup, exact duplicate). First failing reject rule wins
+  (`& ~already`). Required vs. nullable columns are defined in `NULLABLE_COLUMNS` (`nullability.py`):
+  columns NOT in that set are required — a null triggers rejection. The set is configurable per-category
+  via `config.yaml → profiling.rules.nullability`. Source values pass through unchanged (no clamping, no
+  `total_amount` recomputation, no default imputation). A light `_normalize_types` casts code columns
+  (`VendorID`, `RatecodeID`, `payment_type`, `passenger_count`) to int for schema consistency.
+  Uses **dynamic concurrency** (1 worker for fhvhv/yellow to avoid OOM, 2 for green/fhv), one
+  `SilverCleaner` per worker, audit writes behind `_audit_lock`. Skips months already in `stage/`;
+  collected failures re-raise at the end (fail loud). `--silver quality` reads `data/bronze/`;
   `--silver load` reads `data/silver/stage/`. Audit at `data/silver/audit.parquet` (FK `bronze_audit_id`).
 - **StarSchemaBuilder** — builds fixed lookup dims + `dim_date` (2023–2025) + `dim_zone`, and per-category
   facts (uses **dynamic concurrency**: 1 worker for heavy files, 3 for light; skips existing monthly facts, fail-loud on collected errors). Every
@@ -122,11 +127,13 @@ Interrupted runs resume by relaunching the same command.
   always stays on local disk**, even with S3 backend.
 - **Audit chain** — `bronze_audit_id → silver_audit_id → gold_audit_id`; each layer's audit row FKs the
   previous. Polars writes all three `audit.parquet` files.
-- **Reusable heuristics** — silver/profiling rules in `app/profiling/rules/`
-  (`nullability.py`, `reasonableness_ranges.py`, `amount_components.py`) are the **single source of truth**
-  consumed by *both* profiling dimensions and the silver cleaner — change a rule here, not in two places.
-  Gold heuristics live in `app/pipeline/gold/feature_rules/` (`time_blocks.py`, `generosity.py`,
-  `ratecode_tariff.py`, `passenger_groups.py`) — same rule: define there, don't inline in a mart.
+- **Reusable heuristics** — profiling rules in `app/profiling/rules/`
+  (`nullability.py`, `reasonableness_ranges.py`, `amount_components.py`). `nullability.py` is shared
+  between profiling and the silver cleaner (defines which columns are nullable; the complement is
+  required). `reasonableness_ranges.py` and `amount_components.py` are consumed only by the profiling
+  dimensions — the silver cleaner no longer uses them. Gold heuristics live in
+  `app/pipeline/gold/feature_rules/` (`time_blocks.py`, `generosity.py`, `ratecode_tariff.py`,
+  `passenger_groups.py`) — same rule: define there, don't inline in a mart.
 - **Spark day-of-week quirk** — use `time_blocks.iso_weekday()` for day-of-week, **not**
   `date_format(ts, "u")` (`'u'` is not day-of-week in Spark's proleptic datetime patterns).
 - **SparkClient** — `master=local[6]` (`local[*]` OOMs the shared 6g heap; 4 left CPU idle — don't raise
@@ -201,16 +208,17 @@ disk (the `conftest.py` session fixture samples 50 rows from each; `SAMPLE_YEAR 
 | `tests/unit/test_rules_*.py` | Profiling-rule dictionaries (nullability, reasonableness, amount components) | — |
 | `tests/unit/test_feature_rules.py` | Gold feature-rule Column functions (time blocks, generosity, ratecode tariff, passenger groups) | `spark` |
 | `tests/unit/test_settings_schema.py` | Pydantic schema validation (Module, DatasetsConfig, GoldConfig defaults) | — |
-| `tests/spark/test_silver_cleaner.py` | SilverCleaner reject/fix phases, COMPOSITE_KEYS, fhvhv accuracy skip, _first_match | `spark` |
+| `tests/spark/test_silver_cleaner.py` | SilverCleaner reject phases (incomplete, timeliness, datetime, integrity, uniqueness), source-value preservation, _normalize_types, _first_match | `spark` |
 | `tests/spark/test_star_schema.py` | StarSchemaBuilder dims/facts, trip_id (xxhash64 long), ISO weekday, heterogeneous schemas | `spark` |
 | `tests/spark/test_gold_dimensions.py` | GoldDimensionsBuilder (dia_categoria, is_holiday, borough_name_es, ratecode theoretical) | `spark` |
 | `tests/spark/test_gold_marts.py` | GoldBuilder infrastructure (col_or_null, with_zone, partitioning, GoldContext, flat_fare_rows) | `spark` |
 | `tests/spark/test_ml_models.py` | IsolationForest, KModes, SariMax training on synthetic feature stores | `spark` |
 | `tests/integration/test_pipeline_e2e.py` | Full bronze → profiling → silver → star → gold chain + audit FK integrity | `integration`, `spark` |
 
-## Notebooks
+## Documentation
 
-`notebooks/revision_01..05` review each layer: bronze inventory, profiling results, silver integrity
+- `docs` provide config reference and guides in Markdown format (ocassionaly with HTML visualizations)
+- `notebooks/revision_01..05` review each layer: bronze inventory, profiling results, silver integrity
 (`bronze = stage + reject`), gold grains + no-loss proof (`SUM(viajes)` == fact rows), audit chain.
 Keep them consistent when changing schemas or grains.
 

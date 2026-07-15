@@ -230,10 +230,14 @@ app/
 ├── client/download_client.py     # Descargas async (Polars) + auditoría
 ├── pipeline/
 │   ├── bronze.py                  # Etapa Bronze
-│   ├── silver.py                  # Silver: SilverCleaner + SilverPipeline
+│   ├── silver.py                  # Silver executor → SilverPipeline, SilverCleaner
+│   ├── silver_impl/               # Silver (modularized implementation)
+│   │   ├── cleaner.py             #   → SilverCleaner
+│   │   └── pipeline.py            #   → SilverPipeline
 │   ├── star.py                    # Silver: modelo estrella (dims + hechos)
-│   └── gold/                      # Capa Gold
-│       ├── gold_pipeline.py       # Orquestador (GoldPipeline)
+│   ├── gold.py                    # Gold executor → GoldPipeline
+│   └── gold_impl/                 # Gold (modularized implementation)
+│       ├── pipeline.py            #   → GoldPipeline (orquestador)
 │       ├── mart_builder.py        # Bases: GoldBuilder, TripGrainMart, GoldContext
 │       ├── feature_rules/         # Heurísticas reusables (bloques, propina, tarifas)
 │       ├── dims/                  # Dimensiones gold enriquecidas

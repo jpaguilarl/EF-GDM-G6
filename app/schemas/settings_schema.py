@@ -1,4 +1,22 @@
+from typing import Any, Literal
+
 from pydantic import BaseModel, Field
+
+
+class ProfilingRules(BaseModel):
+    nullability: dict[str, list[str]] | None = None
+    reasonableness_ranges: dict[str, dict[str, list[float]]] | None = None
+    amount_formulas: dict[str, dict[str, Any]] | None = None
+    max_trip_duration_minutes: int | None = None
+    amount_tolerance: float | None = None
+
+
+class ProfilingConfig(BaseModel):
+    rules: ProfilingRules = Field(default_factory=ProfilingRules)
+
+
+class StorageConfig(BaseModel):
+    backend: Literal["local", "s3"] = "local"
 
 
 class Module(BaseModel):
@@ -51,6 +69,18 @@ class KmodesConfig(BaseModel):
     random_state: int = 42
 
 
+class SpeedConfig(BaseModel):
+    redis_url: str = "redis://localhost:6379/0"
+    state_ttl_hours: int = 48
+    fraud_score_threshold: float = -0.1
+
+
+class ServingConfig(BaseModel):
+    host: str = "0.0.0.0"
+    port: int = 8000
+    query_cache_ttl_seconds: int = 60
+
+
 class GoldConfig(BaseModel):
     mode: str = "full"
     supply_demand: SupplyDemandConfig = Field(default_factory=SupplyDemandConfig)
@@ -62,5 +92,9 @@ class GoldConfig(BaseModel):
 
 
 class SettingsSchema(BaseModel):
+    storage: StorageConfig
     datasets: DatasetsConfig
     gold: GoldConfig = Field(default_factory=GoldConfig)
+    profiling: ProfilingConfig = Field(default_factory=ProfilingConfig)
+    speed: SpeedConfig = Field(default_factory=SpeedConfig)
+    serving: ServingConfig = Field(default_factory=ServingConfig)

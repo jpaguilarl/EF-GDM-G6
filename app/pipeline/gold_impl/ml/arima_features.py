@@ -1,9 +1,14 @@
-"""D3.1 — Feature store ARIMA: serie temporal univariada de viajes por borough x hora."""
+"""D3.1 — Feature store ARIMA: serie temporal univariada de viajes por borough x hora.
+
+Nota: ``is_holiday`` no se persiste aqui porque ``sarimax_model.py`` lo recalcula
+localmente desde ``HOLIDAY_DATE_KEYS``. Las columnas ``hour_of_day``, ``dow``,
+``is_weekend`` e ``is_holiday`` se eliminaron del output porque ningun consumidor
+(ML model) las lee del store: todas se recomputan en el modelo.
+"""
 
 from pyspark.sql import functions as F
 
-from app.pipeline.gold.feature_rules import time_blocks as tb
-from app.pipeline.gold.mart_builder import GoldBuilder, GoldContext
+from app.pipeline.gold_impl.mart_builder import GoldBuilder, GoldContext
 
 
 class ArimaFeatures(GoldBuilder):
@@ -38,37 +43,11 @@ class ArimaFeatures(GoldBuilder):
             F.count(F.lit(1)).alias("trip_count")
         )
 
-        dow = tb.iso_weekday(F.col("pickup_hour"))
-        agg = (
-            agg.withColumn("hour_of_day", F.hour("pickup_hour"))
-            .withColumn("dow", dow)
-            .withColumn("is_weekend", dow >= 6)
-            .withColumn(
-                "date_key",
-                F.year("pickup_hour") * 10000
-                + F.month("pickup_hour") * 100
-                + F.dayofmonth("pickup_hour"),
-            )
-        )
-
-        date_dim = ctx.gold_dims["date"].select(
-            F.col("date_key").alias("_dk"), F.col("is_holiday")
-        )
-        agg = (
-            agg.join(F.broadcast(date_dim), F.col("date_key") == F.col("_dk"), "left")
-            .drop("_dk")
-            .withColumn("is_holiday", F.coalesce(F.col("is_holiday"), F.lit(False)))
-        )
-
         out = agg.select(
             F.col("borough"),
             F.col("service_id"),
             F.col("pickup_hour"),
             F.col("trip_count"),
-            F.col("hour_of_day"),
-            F.col("dow"),
-            F.col("is_weekend"),
-            F.col("is_holiday"),
             F.year("pickup_hour").alias("year"),
             F.month("pickup_hour").alias("month"),
         )

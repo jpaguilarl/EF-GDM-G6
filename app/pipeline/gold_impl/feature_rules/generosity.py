@@ -4,6 +4,22 @@ from pyspark.sql import Column
 from pyspark.sql import functions as F
 
 
+def categoria_generosidad_py(
+    pct: float | None,
+    standard_low: float = 10.0,
+    standard_high: float = 18.0,
+) -> str | None:
+    if pct is None:
+        return None
+    if pct <= 0:
+        return "Sin Propina"
+    if pct < standard_low:
+        return "Baja"
+    if pct <= standard_high:
+        return "Estándar"
+    return "Alta"
+
+
 def categoria_generosidad(
     pct: Column,
     standard_low: float = 10.0,

@@ -2,37 +2,34 @@ import argparse
 import asyncio
 
 from app.pipeline.bronze import BronzePipeline
-from app.pipeline.gold.ml.isolation_forest_model import IsolationForestModelPipeline
-from app.pipeline.gold.ml.kmodes_model import KModesModelPipeline
-from app.pipeline.gold.ml.sarimax_model import SariMaxModelPipeline
+from app.pipeline.gold_impl.ml.isolation_forest_model import IsolationForestModelPipeline
+from app.pipeline.gold_impl.ml.kmodes_model import KModesModelPipeline
+from app.pipeline.gold_impl.ml.sarimax_model import SariMaxModelPipeline
 from app.pipeline.silver import SilverPipeline
 from app.profiling.profiling_pipeline import ProfilingPipeline
 from app.utils.logger import Logger
-from app.utils.settings import Settings
+from app.utils.settings import settings
 
 
 async def run_bronze_pipeline() -> None:
     logger = Logger()
-    settings = Settings()
-
     logger.info("Iniciando pipeline de bronce para datos NY TLC")
-    logger.info(f"Años configurados: {settings.config.datasets.years}")
+    logger.info(f"Años configurados: {settings.datasets.years}")
 
     pipeline = BronzePipeline()
-    await pipeline.run(settings.config.datasets)
+    await pipeline.run(settings.datasets)
 
     logger.info("Pipeline de bronce completado exitosamente")
 
 
 async def run_profiling_pipeline() -> None:
     logger = Logger()
-    settings = Settings()
 
     logger.info("Iniciando pipeline de profiling (8 dimensiones)")
-    logger.info(f"Años configurados: {settings.config.datasets.years}")
+    logger.info(f"Años configurados: {settings.datasets.years}")
 
     pipeline = ProfilingPipeline()
-    await pipeline.run(settings.config.datasets)
+    await pipeline.run(settings.datasets)
 
     logger.info("Pipeline de profiling completado")
     logger.info("Reportes disponibles en data/profiling/")
@@ -40,13 +37,12 @@ async def run_profiling_pipeline() -> None:
 
 def run_silver_quality() -> None:
     logger = Logger()
-    settings = Settings()
 
     logger.info("Iniciando silver: calidad (correcciones de calidad de datos)")
-    logger.info(f"Años configurados: {settings.config.datasets.years}")
+    logger.info(f"Años configurados: {settings.datasets.years}")
 
     pipeline = SilverPipeline()
-    pipeline.run_quality(settings.config.datasets)
+    pipeline.run_quality(settings.datasets)
 
     logger.info("Silver calidad completado")
     logger.info("Datos limpios en data/silver/stage/")
@@ -68,29 +64,27 @@ def run_silver_schema() -> None:
 
 def run_silver_load() -> None:
     logger = Logger()
-    settings = Settings()
 
     logger.info("Iniciando silver: carga (modelo estrella - tablas de hechos)")
-    logger.info(f"Años configurados: {settings.config.datasets.years}")
+    logger.info(f"Años configurados: {settings.datasets.years}")
 
     pipeline = SilverPipeline()
-    pipeline.run_load(settings.config.datasets)
+    pipeline.run_load(settings.datasets)
 
     logger.info("Silver carga completado")
     logger.info("Tablas de hechos en data/silver/star/facts/")
 
 
 def run_gold_pipeline(mode: str, only: list[str] | None) -> None:
-    from app.pipeline.gold.gold_pipeline import GoldPipeline
+    from app.pipeline.gold import GoldPipeline
 
     logger = Logger()
-    settings = Settings()
 
     logger.info(f"Iniciando pipeline de oro (gold) | modo={mode}")
-    logger.info(f"Años configurados: {settings.config.datasets.years}")
+    logger.info(f"Años configurados: {settings.datasets.years}")
 
     pipeline = GoldPipeline(mode=mode, only=only)
-    pipeline.run(settings.config)
+    pipeline.run(settings)
 
     logger.info("Pipeline de oro completado")
     logger.info("Marts Power BI en data/gold/marts/")
@@ -100,13 +94,12 @@ def run_gold_pipeline(mode: str, only: list[str] | None) -> None:
 
 def run_gold_ml_pipeline(which: str) -> None:
     logger = Logger()
-    settings = Settings()
 
     if which == "isolation":
         logger.info("Iniciando Isolation Forest sobre ml_feat_isolation_fraud")
-        logger.info(f"Años configurados: {settings.config.datasets.years}")
+        logger.info(f"Años configurados: {settings.datasets.years}")
 
-        pipeline = IsolationForestModelPipeline(settings.config)
+        pipeline = IsolationForestModelPipeline(settings)
         result = pipeline.run()
 
         if result >= 0:
@@ -115,9 +108,9 @@ def run_gold_ml_pipeline(which: str) -> None:
             logger.info("Modelos en data/gold/models/isolation_forest/")
     elif which == "kmodes":
         logger.info("Iniciando K-Modes sobre ml_feat_kmodes_trips")
-        logger.info(f"Años configurados: {settings.config.datasets.years}")
+        logger.info(f"Años configurados: {settings.datasets.years}")
 
-        pipeline = KModesModelPipeline(settings.config)
+        pipeline = KModesModelPipeline(settings)
         result = pipeline.run()
 
         if result >= 0:
@@ -126,9 +119,9 @@ def run_gold_ml_pipeline(which: str) -> None:
             logger.info("Modelos en data/gold/models/kmodes/")
     elif which == "sarimax":
         logger.info("Iniciando SARIMAX trip-count forecaster sobre ml_feat_arima_trips")
-        logger.info(f"Años configurados: {settings.config.datasets.years}")
+        logger.info(f"Años configurados: {settings.datasets.years}")
 
-        pipeline = SariMaxModelPipeline(settings.config)
+        pipeline = SariMaxModelPipeline(settings)
         result = pipeline.run()
 
         if result >= 0:
@@ -179,8 +172,7 @@ def run_full_pipeline() -> None:
     Cualquier fallo de fase se propaga (exit != 0): no hay exito silencioso.
     """
     logger = Logger()
-    settings = Settings()
-    datasets = settings.config.datasets
+    datasets = settings.datasets
 
     logger.info("=== PIPELINE (1/7): bronce (descarga idempotente) ===")
     asyncio.run(run_bronze_pipeline())

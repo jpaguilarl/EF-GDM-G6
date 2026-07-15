@@ -8,8 +8,8 @@ score final del modelo.
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 
-from app.pipeline.gold.feature_rules import ratecode_tariff as rt
-from app.pipeline.gold.mart_builder import (
+from app.pipeline.gold_impl.feature_rules import ratecode_tariff as rt
+from app.pipeline.gold_impl.mart_builder import (
     GoldContext,
     TripGrainMart,
     col_or_null,
@@ -50,7 +50,6 @@ class IsolationFraudFeatures(TripGrainMart):
             (dur_seg > 0) & (dist > 0), F.round(dist / (dur_seg / 3600.0), 2)
         ).otherwise(F.lit(None).cast("double"))
         costo = F.round(fare / (dist + F.lit(0.001)), 4)
-        desviacion = rt.desviacion_tarifa_teorica(fare, flat_fare)
         candidate = rt.is_anomaly_candidate(ratecode, fare, flat_fare, velocidad, costo)
         ratio_peaje = F.when(
             fare > 0, F.round(tolls / fare, 4)
@@ -59,22 +58,15 @@ class IsolationFraudFeatures(TripGrainMart):
         return df.select(
             F.col("trip_id"),
             F.lit(category).alias("service_id"),
-            F.col("date_key"),
             ratecode.alias("ratecode_id"),
-            F.col("ratecode_name"),
-            F.col("pickup_datetime"),
-            F.col("dropoff_datetime"),
             dur_seg.alias("duracion_viaje_segundos"),
             dist.alias("trip_distance"),
             fare.alias("fare_amount"),
-            tolls.alias("tolls_amount"),
             col_or_null(df, "extra").alias("extra"),
             col_or_null(df, "mta_tax").alias("mta_tax"),
-            col_or_null(df, "improvement_surcharge").alias("improvement_surcharge"),
             velocidad.alias("velocidad_promedio_calculada"),
             costo.alias("costo_por_distancia"),
             ratio_peaje.alias("ratio_peaje_tarifa"),
-            desviacion.alias("desviacion_tarifa_teorica"),
             candidate.alias("is_anomaly_candidate"),
             F.lit(year).alias("year"),
             F.lit(month).alias("month"),
