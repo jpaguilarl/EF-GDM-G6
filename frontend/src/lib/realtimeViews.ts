@@ -1,0 +1,66 @@
+import type { RealtimeViewConfig } from "./types";
+
+export const REALTIME_VIEWS: RealtimeViewConfig[] = [
+  {
+    key: "demand-volume",
+    mart: "mart_demand_volume",
+    label: "Demanda / Volumen",
+    timeColumn: "pickup_hour",
+    dedupKey: ["service_id", "fecha_viaje", "pickup_hour", "pu_location_id"],
+    valueField: "viajes",
+    categoryField: "pu_location_id",
+    chartType: "bar",
+  },
+  {
+    key: "financial-performance",
+    mart: "mart_financial_performance",
+    label: "Rendimiento Financiero",
+    timeColumn: "fecha_viaje",
+    dedupKey: ["service_id", "fecha_viaje", "bloque_horario", "pu_location_id"],
+    valueField: "total_amount",
+    categoryField: "pu_location_id",
+    chartType: "line",
+  },
+  {
+    key: "operational-profile",
+    mart: "mart_operational_profile",
+    label: "Perfil Operacional",
+    timeColumn: "fecha_viaje",
+    dedupKey: ["service_id", "fecha_viaje", "bloque_horario", "pu_location_id"],
+    valueField: "viajes",
+    categoryField: "pu_location_id",
+    chartType: "bar",
+  },
+  {
+    key: "supply-demand",
+    mart: "mart_supply_demand_balance",
+    label: "Balance Oferta/Demanda",
+    timeColumn: "bloque_temporal_t",
+    dedupKey: ["location_id", "bloque_temporal_t"],
+    valueField: "flujo_neto_oferta",
+    categoryField: "borough",
+    chartType: "bar",
+  },
+  {
+    key: "tipping",
+    mart: "mart_tipping_behavior",
+    label: "Propinas",
+    timeColumn: "fecha_viaje",
+    dedupKey: ["service_id", "fecha_viaje", "pu_borough", "do_borough", "payment_type_id", "categoria_generosidad"],
+    valueField: "propina_total",
+    categoryField: "categoria_generosidad",
+    chartType: "bar",
+  },
+  {
+    key: "abc-xyz",
+    mart: "mart_abc_xyz_zones",
+    label: "ABC / XYZ Zonas",
+    timeColumn: null,
+    dedupKey: [],
+    valueField: "viajes_realtime",
+    categoryField: "pu_location_id",
+    chartType: "bar",
+  },
+];
+
+export const REALTIME_BASE = "/api/v1/realtime";

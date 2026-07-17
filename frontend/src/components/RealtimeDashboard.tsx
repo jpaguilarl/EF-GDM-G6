@@ -3,7 +3,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { useRealtimeStream } from "../hooks/useRealtimeStream";
 import type { RealtimeViewConfig } from "../lib/types";
 import { SummaryCard } from "./SummaryCard";
-import { Activity } from "lucide-react";
+import { Activity, RefreshCw } from "lucide-react";
 
 interface RealtimeDashboardProps {
   viewConfig: RealtimeViewConfig;
@@ -13,16 +13,23 @@ interface RealtimeDashboardProps {
 const COLORS = ["#a00003", "#415f8e", "#004aa0", "#5c403b", "#916f6a", "#2e7d32", "#f57c00", "#6a1b9a"];
 
 export function RealtimeDashboard({ viewConfig, filters }: RealtimeDashboardProps) {
-  const { rows, status, lastEventAt } = useRealtimeStream(viewConfig.key, viewConfig, filters);
+  const { rows, status, lastEventAt, lastError, reload } = useRealtimeStream(viewConfig.key, viewConfig);
+
+  const filteredRows = useMemo(() => {
+    if (!filters || Object.keys(filters).length === 0) return rows;
+    return rows.filter((r) =>
+      Object.entries(filters).every(([k, v]) => String(r[k] ?? "") === v),
+    );
+  }, [rows, filters]);
 
   const totalValue = useMemo(
-    () => rows.reduce((s, r) => s + (Number(r[viewConfig.valueField]) || 0), 0),
-    [rows, viewConfig.valueField],
+    () => filteredRows.reduce((s, r) => s + (Number(r[viewConfig.valueField]) || 0), 0),
+    [filteredRows, viewConfig.valueField],
   );
 
   const topCategories = useMemo(() => {
     const grouped: Record<string, number> = {};
-    for (const row of rows) {
+    for (const row of filteredRows) {
       const cat = String(row[viewConfig.categoryField] ?? "?");
       grouped[cat] = (grouped[cat] || 0) + (Number(row[viewConfig.valueField]) || 0);
     }
@@ -30,7 +37,7 @@ export function RealtimeDashboard({ viewConfig, filters }: RealtimeDashboardProp
       .map(([name, value]) => ({ name, value }))
       .sort((a, b) => b.value - a.value)
       .slice(0, 15);
-  }, [rows, viewConfig.categoryField, viewConfig.valueField]);
+  }, [filteredRows, viewConfig.categoryField, viewConfig.valueField]);
 
   const statusPill = () => {
     switch (status) {
@@ -41,12 +48,12 @@ export function RealtimeDashboard({ viewConfig, filters }: RealtimeDashboardProp
     }
   };
 
-  const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
+  const columns = filteredRows.length > 0 ? Object.keys(filteredRows[0]) : [];
 
   return (
     <div className="space-y-4">
       {/* Status + KPIs */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 flex-wrap">
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-surface-muted border border-border-subtle">
           <span className={`w-2 h-2 rounded-full ${statusPill()}`} />
           <span className="text-caption text-on-surface-variant capitalize">{status}</span>
@@ -56,10 +63,22 @@ export function RealtimeDashboard({ viewConfig, filters }: RealtimeDashboardProp
             Último evento: {new Date(lastEventAt).toLocaleTimeString()}
           </span>
         )}
+        {status === "closed" && (
+          <button
+            onClick={reload}
+            className="flex items-center gap-1 px-3 py-1.5 rounded-DEFAULT text-caption bg-primary-container text-on-primary-container hover:bg-primary-container/90 transition-colors"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            Reintentar
+          </button>
+        )}
+        {lastError && (
+          <span className="text-caption text-error">{lastError}</span>
+        )}
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <SummaryCard label="Filas en Vivo" value={rows.length} icon={<Activity className="w-5 h-5" />} accent="primary" />
+        <SummaryCard label="Filas en Vivo" value={filteredRows.length} icon={<Activity className="w-5 h-5" />} accent="primary" />
         <SummaryCard
           label={`Total ${viewConfig.valueField}`}
           value={Math.round(totalValue * 100) / 100}
@@ -89,11 +108,15 @@ export function RealtimeDashboard({ viewConfig, filters }: RealtimeDashboardProp
       {/* Table */}
       <div className="bg-surface-container-lowest border border-border-subtle rounded-DEFAULT p-6">
         <h4 className="text-label-md text-on-surface-variant uppercase tracking-wide mb-4">
-          Datos en Vivo ({rows.length} filas)
+          Datos en Vivo ({filteredRows.length} filas)
         </h4>
-        {rows.length === 0 ? (
+        {filteredRows.length === 0 ? (
           <div className="flex items-center justify-center py-16 text-on-surface-variant italic">
-            {status === "connected" ? "Sin datos en vivo" : "Conectando..."}
+            {status === "connected"
+              ? "Sin datos en vivo"
+              : status === "closed"
+                ? "Conexión perdida"
+                : "Conectando..."}
           </div>
         ) : (
           <div className="overflow-x-auto max-h-96 overflow-y-auto">
@@ -106,7 +129,7 @@ export function RealtimeDashboard({ viewConfig, filters }: RealtimeDashboardProp
                 </tr>
               </thead>
               <tbody>
-                {rows.slice(0, 500).map((row, i) => (
+                {filteredRows.slice(0, 500).map((row, i) => (
                   <tr key={i} className={`border-b border-border-subtle ${i % 2 === 0 ? "" : "bg-surface-muted"}`}>
                     {columns.map((col) => (
                       <td key={col} className="px-3 py-1.5 whitespace-nowrap tabular-nums">

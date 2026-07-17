@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from typing import Any
 
 from fastapi import APIRouter, Query, Request
@@ -65,9 +66,19 @@ def _build_filters(
     return filters
 
 
+def _sanitize(obj: Any) -> Any:
+    if isinstance(obj, float):
+        return None if (math.isnan(obj) or math.isinf(obj)) else obj
+    if isinstance(obj, list):
+        return [_sanitize(x) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _sanitize(v) for k, v in obj.items()}
+    return obj
+
+
 async def _sse_format(async_gen):
     async for chunk in async_gen:
-        yield f"event: {chunk['event']}\ndata: {json.dumps(chunk['data'], default=str)}\n\n"
+        yield f"event: {chunk['event']}\ndata: {json.dumps(_sanitize(chunk['data']), default=str)}\n\n"
 
 
 async def event_generator(
