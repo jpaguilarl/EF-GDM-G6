@@ -49,17 +49,18 @@ Interrupted runs resume by relaunching the same command.
   enrich → aggregate (Redis HINCRBY) → fraud score (IsolationForest from joblib).
 - **Redis** — speed layer state (aggregations, uniqueness check via SETNX trip_id).
   TTL 48h, ~50–100MB. Key prefix `rt:`.
-- **trip_id parity** — `xxhash64` of `SilverCleaner.COMPOSITE_KEYS` in pure Python
-  (xxhash lib) produces the same BIGINT as Spark's `F.xxhash64`. A ride ingested
-  real-time has the same trip_id as when it flows through the batch silver layer.
+- **trip_id parity — INTENDED BUT NOT HOLDING** (see Known issues). The speed layer
+  hashes `SilverCleaner.COMPOSITE_KEYS` with `xxhash.xxh64(..., seed=0).intdigest()`;
+  Spark's `F.xxhash64` uses **seed 42** and returns a **signed** BIGINT. They differ.
 - **No Spark in serving** — historic queries use Polars `scan_parquet()` (lazy,
   predicate pushdown); real-time uses pure Python + Redis. The serving container
   is ~500MB vs ~2GB for Spark.
 - **Merge boundary** — batch gold has complete past blocks; Redis has the current
-  incomplete block. `MergedViewReader` stitches them: deduplication by key tuple
-  (batch wins on overlap). Old Redis keys expire after 48h (TTL) — the canonical
-  data is always in silver/star facts (trip_id parity guarantees the batch
-  pipeline picks it up).
+  incomplete block. `MergedViewReader` stitches them: deduplication by **aggregation
+  key tuple** (`dv_key_from_ride`, `fp_key_from_ride`, … — e.g. fecha × hora × zona),
+  **not** by trip_id; batch wins on overlap. This is why the trip_id parity issue
+  causes no double counting. Old Redis keys expire after 48h (TTL) — the canonical
+  data is always in silver/star facts.
 
 ### Run
 
@@ -71,6 +72,54 @@ uv run main.py --speed                          # speed engine only (stdin JSON)
 docker compose up serving redis -d              # Docker
 ```
 
+## Power BI export (`scripts/`, standalone — not pipeline stages)
+
+```bash
+uv run scripts/export_powerbi.py                # gold → one parquet per dataset in data/powerbi/ (18 files)
+uv run scripts/export_powerbi.py --skip-heavy   # omit ml_feat_isolation_fraud + ml_feat_kmodes_trips
+uv run scripts/export_powerbi.py --only mart_demand_volume,dim_zone_gold
+uv run scripts/export_audit_powerbi.py          # audit trail → data/powerbi_audit/ (5 tables)
+```
+
+- **Why it exists** — gold is Hive-partitioned: `service_id`/`year`/`month` live **only in the folder
+  names, not inside the parquet files**. Concatenating the parts by hand silently drops them. The export
+  rematerializes them as real columns.
+- **Three layouts, detected not assumed** — Hive (marts, feature stores); **keys already inside the file**
+  (`ml_isolation_fraud_scores`, `ml_sarimax_trips_forecast`) where Hive discovery *collides* with the
+  file's own column (`ratecode_id` int64 vs int32, `borough` large_string vs string) so it reads flat;
+  and unpartitioned dirs (dims — Spark writes `dim_x.parquet/` as a **directory**). A mixed layout raises
+  rather than guessing.
+- **Streaming writes** — the two trip-grain feature stores exceed 100M rows; batches are written
+  incrementally, never materialized whole.
+- **snappy, not zstd-9** (the project storage default) — Power Query reads snappy on every build; zstd
+  only on recent ones. `--compression zstd` if the target supports it.
+- **`kmodes_model/` is 4 datasets in one directory** (`tuning_`/`centers_`/`labels_`/`profiles_` +
+  `_service_id=`), not valid Hive — split by prefix. `labels` already carries `service_id` in-file.
+- **Ignore `.`/`_` prefixed paths** (matching pyarrow's `ignore_prefixes`): `isolation_forest_model.py`
+  leaves `_tmp_{rc}/` staging dirs behind (never cleaned up — see Known issues), which would double-count.
+- **Audit export** — marks `es_ultima_corrida` rather than deduplicating (the `audit.parquet` files are
+  **append logs**; summing raw inflates bronze ~43%: 1,289,988,478 vs the real 904,327,862). Casts String
+  timestamps → Datetime, parses `categoria`/`anio`/`mes` from `source_file` **after normalizing the
+  separator** (bronze recorded `\`, silver `/` — a raw join yields zero rows), and adds `filas_en_disco`
+  because the gold audit's `rowcount_output` is 0 for incremental runs that skipped existing partitions.
+
+## Known issues
+
+- **`trip_id` parity is broken** (`app/speed/event_processor.py:168`). The speed layer uses
+  `xxhash.xxh64(s, seed=0).intdigest()`; Spark's `F.xxhash64` uses **seed 42** and returns a **signed**
+  BIGINT. Verified: `"a||b"` → Spark `422548665953921601`, speed `1685461149381629335`. Fix would be
+  `seed=42` + `u - 2**64 if u >= 2**63 else u` — **deliberately not applied** (owner's call: the
+  behavior change isn't worth it). Impact is limited: the merged view dedups by aggregation key tuple,
+  not `trip_id`, and `rt:seen:*` is self-consistent — but a real-time ride **cannot be correlated with
+  its batch fact row** (e.g. `rt:fraud:{trip_id}` won't join against silver/star facts).
+  `tests/integration/test_serving_e2e.py` cannot catch it: it hashes with `xxhash` on both sides.
+- **`isolation_forest_model.py:205-209`** writes each ratecode to `_tmp_{rc}`, copies it to
+  `ratecode_id={rc}`, and **never deletes the staging dir** — every score is on disk twice. Reads are
+  unaffected (pyarrow/Spark ignore `_`-prefixed paths) but disk usage doubles and naive row counts report
+  2.4M instead of 1.2M. Fix: `shutil.rmtree(temp_path)` after the final write.
+- **`app/pipeline/silver_impl/pipeline.py`** is an empty leftover from the modularization; `SilverPipeline`
+  lives in `app/pipeline/silver.py`.
+
 ## `app.` package (flat, no `src/`)
 
 | Module | Class | Role |
@@ -81,9 +130,9 @@ docker compose up serving redis -d              # Docker
 | `app.profiling.dataset_profiler` | `DatasetProfiler` | Runs one check per dimension class in `app/profiling/dimensions/` per file (df persisted once, unpersisted after) |
 | `app.profiling.dimensions` | `BaseDimension` + 8 subcls | accuracy, completeness, consistency, integrity, reasonableness, timeliness, uniqueness, validity |
 | `app.profiling.reporter` | `Reporter` | Writes JSON + `index.html` to `data/profiling/` |
-| `app.pipeline.silver` (executor) | `SilverPipeline` (entry), `SilverCleaner` | Quality clean (reject + fix), 2 files in parallel + audit lock. Executor: `app/pipeline/silver.py`; impl: `app/pipeline/silver_impl/` |
-| `app.pipeline.star` | `StarSchemaBuilder` | Star dims + facts (3 facts in parallel; facts carry `trip_id` + std timestamps) |
-| `app.pipeline.gold` (executor) | `GoldPipeline` (entry) | Gold orchestrator: 6 marts + 3 ML feature stores. Executor: `app/pipeline/gold.py`; impl: `app/pipeline/gold_impl/` |
+| `app.pipeline.silver` | `SilverPipeline` | Reject-only clean, dynamic concurrency + audit lock. Lives in `app/pipeline/silver.py`; `SilverCleaner`/`StarSchemaBuilder` in `app/pipeline/silver_impl/` (`silver_impl/pipeline.py` is an empty leftover) |
+| `app.pipeline.silver_impl.star` | `StarSchemaBuilder` | Star dims + facts (`MAX_PARALLEL_FACTS = 3`; facts carry `trip_id` + std timestamps) |
+| `app.pipeline.gold` | `GoldPipeline` | Gold orchestrator: 6 marts + 3 ML feature stores. Lives in `app/pipeline/gold.py`; builders/bases in `app/pipeline/gold_impl/` (there is no `gold_impl/pipeline.py`) |
 | `app.pipeline.gold_impl.mart_builder` | `GoldBuilder`, `TripGrainMart`, `GoldContext` | Builder bases + shared context (`get_union_facts()` lazy union) |
 | `app.pipeline.gold_impl.dims.gold_dimensions` | `GoldDimensionsBuilder` | `dim_date_gold`, `dim_zone_gold`, `dim_ratecode_theoretical` |
 | `app.pipeline.gold_impl.ml.isolation_forest_model` | `IsolationForestModelPipeline` | Trains sklearn IsolationForest per RatecodeID, writes scores + `model.joblib` |
@@ -172,7 +221,7 @@ docker compose up serving redis -d              # Docker
   between profiling and the silver cleaner (defines which columns are nullable; the complement is
   required). `reasonableness_ranges.py` and `amount_components.py` are consumed only by the profiling
   dimensions — the silver cleaner no longer uses them. Gold heuristics live in
-  `app/pipeline/gold/feature_rules/` (`time_blocks.py`, `generosity.py`, `ratecode_tariff.py`,
+  `app/pipeline/gold_impl/feature_rules/` (`time_blocks.py`, `generosity.py`, `ratecode_tariff.py`,
   `passenger_groups.py`) — same rule: define there, don't inline in a mart.
 - **Panel** — React + Vite frontend at `frontend/` served via FastAPI `StaticFiles` at `/panel`.
   Backend routes at `/api/v1/panel/*` (config, env, jobs with SSE logs, audit, ML readers).
@@ -210,15 +259,16 @@ while `uv run main.py ...` keeps working exactly as before for anyone not using 
   separate Spark container). Sets `SPARK_DRIVER_MEMORY`/`SPARK_MASTER_CORES` (lower than bare-metal default,
   VM shares RAM with Airflow+Postgres) and `SPARK_LOCAL_DIR=/tmp/spark-temp` (container disk, not the slow
   `./data` bind mount).
-- **`dags/dag_01_bronze.py` … `dag_07_gold_ml.py`** — each phase is its **own DAG**, chained via
-  `TriggerDagRunOperator(wait_for_completion=True)`: `dag_01_bronze → dag_02_silver_quality →
+- **`dags/dag_01_bronze.py` … `dag_08_serving.py`** — **8 DAGs**, each phase its **own DAG**. Six chained
+  via `TriggerDagRunOperator(wait_for_completion=True)`: `dag_01_bronze → dag_02_silver_quality →
   dag_03_silver_schema → dag_04_silver_load → dag_05_gold → dag_06_profiling` (profiling last on purpose —
-  read-only). `dag_07_gold_ml` (kmodes/isolation/sarimax, chained sequentially) is triggered manually from
-  the UI. All tasks are thin `BashOperator`s over the existing CLI.
+  read-only). Two are `schedule=None`, triggered manually from the UI: `dag_07_gold_ml`
+  (kmodes/isolation/sarimax, chained sequentially) and `dag_08_serving` (`--serve`). All tasks are thin
+  `BashOperator`s over the existing CLI.
 - **`.env`** (from `.env.example`, gitignored) — `STORAGE_BACKEND`/AWS creds/`S3_BUCKET`/`S3_PREFIX` +
   `SPARK_DRIVER_MEMORY`/`SPARK_MASTER_CORES` + Airflow bootstrap vars. Bring up: `uv lock` once (commit
   `uv.lock` — `uv sync --frozen` fails on a stale lock), `docker compose build`, `docker compose up
-  airflow-init` once, then `docker compose up`. **Unpause all 7 DAGs** before triggering `dag_01_bronze`
+  airflow-init` once, then `docker compose up`. **Unpause the chain** (`dag_01`…`dag_06`) before triggering `dag_01_bronze`
   (the trigger chain sits queued forever behind a paused downstream DAG).
 - **`.dockerignore`** keeps `data/` (huge), `.venv/` (Windows binaries would clobber the Linux venv) and
   `.env` (AWS secrets) out of the image — don't remove entries. `HADOOP_HOME`/`winutils` is only for

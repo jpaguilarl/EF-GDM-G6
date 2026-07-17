@@ -1,0 +1,111 @@
+{
+  "name": "NYC TLC - Rendimiento Financiero",
+  "dataColors": [
+    "#A6A6A6",
+    "#F2C230",
+    "#7B84C4",
+    "#9B6FBF",
+    "#3FBFAD",
+    "#E8734A",
+    "#5B9BD5",
+    "#D65A7A"
+  ],
+  "background": "#141414",
+  "foreground": "#F5F5F5",
+  "tableAccent": "#F2C230",
+  "good": "#4CAF7D",
+  "neutral": "#E8B33C",
+  "bad": "#E04B4B",
+  "maximum": "#4CAF7D",
+  "center": "#E8B33C",
+  "minimum": "#E04B4B",
+  "textClasses": {
+    "callout": {
+      "fontSize": 40,
+      "fontFace": "Segoe UI Semibold",
+      "color": "#FFFFFF"
+    },
+    "title": {
+      "fontSize": 13,
+      "fontFace": "Segoe UI",
+      "color": "#E6E6E6"
+    },
+    "header": {
+      "fontSize": 12,
+      "fontFace": "Segoe UI Semibold",
+      "color": "#F2C230"
+    },
+    "label": {
+      "fontSize": 10,
+      "fontFace": "Segoe UI",
+      "color": "#C8C8C8"
+    }
+  },
+  "visualStyles": {
+    "*": {
+      "*": {
+        "background": [
+          {
+            "show": true,
+            "color": { "solid": { "color": "#1F1F1F" } },
+            "transparency": 0
+          }
+        ],
+        "border": [
+          {
+            "show": true,
+            "color": { "solid": { "color": "#3A3A3A" } },
+            "radius": 6
+          }
+        ],
+        "dropShadow": [{ "show": false }],
+        "visualHeader": [{ "show": false }],
+        "title": [
+          {
+            "fontColor": { "solid": { "color": "#E6E6E6" } },
+            "background": { "solid": { "color": "#1F1F1F" } },
+            "alignment": "left",
+            "fontSize": 13
+          }
+        ],
+        "labels": [{ "color": { "solid": { "color": "#C8C8C8" } } }],
+        "legend": [
+          {
+            "labelColor": { "solid": { "color": "#C8C8C8" } },
+            "position": "Top"
+          }
+        ],
+        "categoryAxis": [
+          {
+            "labelColor": { "solid": { "color": "#C8C8C8" } },
+            "gridlineColor": { "solid": { "color": "#2E2E2E" } },
+            "titleColor": { "solid": { "color": "#C8C8C8" } }
+          }
+        ],
+        "valueAxis": [
+          {
+            "labelColor": { "solid": { "color": "#C8C8C8" } },
+            "gridlineColor": { "solid": { "color": "#2E2E2E" } },
+            "titleColor": { "solid": { "color": "#C8C8C8" } }
+          }
+        ]
+      }
+    },
+    "page": {
+      "*": {
+        "background": [
+          {
+            "color": { "solid": { "color": "#0D0D0D" } },
+            "transparency": 0
+          }
+        ],
+        "outspace": [
+          {
+            "color": { "solid": { "color": "#0D0D0D" } },
+            "transparency": 0
+          }
+        ]
+      }
+    }
+  }
+}

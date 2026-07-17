@@ -1,0 +1,242 @@
+// =====================================================================
+// NYC TLC - Rendimiento Financiero del Sistema
+// Modelo: mart_financial_performance + dim_date_gold + dim_zone_gold
+//
+// ORDEN DE CREACION:
+//   1. La tabla dim_service          (Modelado > Nueva tabla)
+//   2. Las 2 columnas calculadas     (Modelado > Nueva columna)
+//   3. Las medidas                   (Modelado > Nueva medida)
+//
+// Los comentarios `//` NO se pegan en Power BI: copia solo la formula.
+// =====================================================================
+
+
+// =====================================================================
+// 1. TABLA CALCULADA  ->  Modelado > Nueva tabla
+// =====================================================================
+
+// El mart guarda service_id como codigo tecnico ('yellow'/'green'/'fhvhv').
+// Esta dim le da el nombre de presentacion y un orden estable para el eje.
+// NO existe 'fhv' (Other FHV): el dataset FHV de la TLC no trae columnas de
+// dinero, por eso FinancialPerformanceMart.applies_to lo excluye.
+dim_service =
+DATATABLE (
+    "service_id", STRING,
+    "Tipo de Servicio", STRING,
+    "orden_servicio", INTEGER,
+    {
+        { "yellow", "Yellow Taxi", 1 },
+        { "green", "Green Taxi", 2 },
+        { "fhvhv", "High Volume FHV", 3 }
+    }
+)
+
+
+// =====================================================================
+// 2. COLUMNAS CALCULADAS  ->  Modelado > Nueva columna
+// =====================================================================
+
+// --- 2.1 En la tabla dim_date_gold ---
+// month_name viene en ingles desde Spark ('June'). El tablero va en espanol.
+// Despues de crearla: seleccionala > Herramientas de columna > Ordenar por
+// columna > month   (si no, ordena alfabetico: Abr, Ago, Dic...)
+mes_es =
+SWITCH (
+    dim_date_gold[month],
+    1, "Ene",
+    2, "Feb",
+    3, "Mar",
+    4, "Abr",
+    5, "May",
+    6, "Jun",
+    7, "Jul",
+    8, "Ago",
+    9, "Sep",
+    10, "Oct",
+    11, "Nov",
+    12, "Dic"
+)
+
+
+// --- 2.2 En la tabla mart_financial_performance ---
+// Ingreso del lado pasajero, homogeneo entre servicios.
+//
+// Por que hace falta: yellow/green traen `total_amount` (que YA incluye
+// propinas, peajes, recargos y tasas). fhvhv NO tiene total_amount: hay que
+// sumar sus componentes a mano.
+//
+// congestion_surcharge / cbd_congestion_fee / airport_fee existen en AMBOS
+// lados, pero en taxis ya estan dentro de total_amount. Por eso el IF por
+// servicio: sumarlas planas duplicaria el ingreso de los taxis.
+ingreso_bruto =
+IF (
+    mart_financial_performance[service_id] = "fhvhv",
+    COALESCE ( mart_financial_performance[base_passenger_fare], 0 )
+        + COALESCE ( mart_financial_performance[tolls], 0 )
+        + COALESCE ( mart_financial_performance[bcf], 0 )
+        + COALESCE ( mart_financial_performance[sales_tax], 0 )
+        + COALESCE ( mart_financial_performance[tips], 0 )
+        + COALESCE ( mart_financial_performance[congestion_surcharge], 0 )
+        + COALESCE ( mart_financial_performance[cbd_congestion_fee], 0 )
+        + COALESCE ( mart_financial_performance[airport_fee], 0 ),
+    COALESCE ( mart_financial_performance[total_amount], 0 )
+)
+
+
+// =====================================================================
+// 3. MEDIDAS  ->  Modelado > Nueva medida
+//    Creala con la tabla mart_financial_performance seleccionada.
+// =====================================================================
+
+// --- 3.1 KPI principales ------------------------------------------------
+
+// Formato: Moneda $ espanol (Estados Unidos), 0 decimales
+Ingreso Bruto Total =
+SUM ( mart_financial_performance[ingreso_bruto] )
+
+// Version texto para la tarjeta, para que muestre "$26.83B" como la imagen.
+// Sin esto Power BI en espanol escribe "26,83 mil M" con unidades de
+// visualizacion. Usa esta en la tarjeta y la de arriba en graficos/matriz.
+//
+// El tercer argumento "en-US" NO es opcional: FORMAT usa la configuracion
+// regional del modelo, y en espanol "$#,0.00" saldria como "$26,83B" (coma
+// decimal). El locale explicito fuerza el punto, como en la maqueta.
+Ingreso Bruto Total (etiqueta) =
+VAR v = [Ingreso Bruto Total]
+RETURN
+    SWITCH (
+        TRUE (),
+        ISBLANK ( v ), BLANK (),
+        ABS ( v ) >= 1E9, FORMAT ( v / 1E9, "$#,0.00", "en-US" ) & "B",
+        ABS ( v ) >= 1E6, FORMAT ( v / 1E6, "$#,0.0", "en-US" ) & "M",
+        FORMAT ( v, "$#,0", "en-US" )
+    )
+
+// OJO - LA TRAMPA DEL PROYECTO:
+// El mart trae la columna `ratio_pago_conductor` YA CALCULADA por fila
+// agregada. NO uses AVERAGE(ratio_pago_conductor): da 80.95% porque promedia
+// filas de peso muy distinto (una fila = 1 zona x bloque x dia). Lo correcto
+// es el promedio ponderado por dinero = SUM/SUM, que da 77.74%.
+// Son 3.21 puntos de diferencia.
+//
+// Blanco para yellow/green a proposito: los taxis no tienen driver_pay,
+// el conductor es el dueno del ingreso. Solo fhvhv tiene plataforma.
+//
+// Formato: Porcentaje, 2 decimales
+Ratio Pago Conductor =
+DIVIDE (
+    SUM ( mart_financial_performance[driver_pay] ),
+    SUM ( mart_financial_performance[base_passenger_fare] )
+)
+
+// margen_plataforma = base_passenger_fare - driver_pay, guardado en DOLARES
+// (re-agregable). Aqui se vuelve % dividiendo entre la tarifa base.
+// Por construccion: Margen % + Ratio Pago Conductor = 100%.
+//
+// Formato: Porcentaje, 2 decimales
+Margen Promedio Plataforma =
+DIVIDE (
+    SUM ( mart_financial_performance[margen_plataforma] ),
+    SUM ( mart_financial_performance[base_passenger_fare] )
+)
+
+
+// --- 3.2 Componentes de tarifa (grafico de barras) ----------------------
+//
+// Cada medida une el par de columnas equivalente entre taxis y fhvhv. No hay
+// doble conteo: cada columna del par es NULL en el servicio contrario
+// (fare_amount solo taxis, base_passenger_fare solo fhvhv, etc.).
+// SUM() ignora los blancos, y en DAX  BLANK() + numero = numero.
+
+// Formato: Moneda $, 0 decimales
+Tarifa Base =
+SUM ( mart_financial_performance[fare_amount] )
+    + SUM ( mart_financial_performance[base_passenger_fare] )
+
+Propinas =
+SUM ( mart_financial_performance[tip_amount] )
+    + SUM ( mart_financial_performance[tips] )
+
+Peajes =
+SUM ( mart_financial_performance[tolls_amount] )
+    + SUM ( mart_financial_performance[tolls] )
+
+// Ambas columnas existen en los dos servicios y son distintas entre si,
+// asi que aqui la suma plana SI es correcta.
+// cbd_congestion_fee solo tiene datos desde 2025 (tarifa CBD de la MTA).
+Recargo Congestion =
+SUM ( mart_financial_performance[congestion_surcharge] )
+    + SUM ( mart_financial_performance[cbd_congestion_fee] )
+
+
+// --- 3.3 Auxiliares ------------------------------------------------------
+
+// Formato: Numero entero, con separador de miles
+Viajes Totales =
+SUM ( mart_financial_performance[viajes] )
+
+Millas Totales =
+SUM ( mart_financial_performance[trip_distance] )
+    + SUM ( mart_financial_performance[trip_miles] )
+
+// Formato: Moneda $, 2 decimales
+Ingreso por Milla =
+DIVIDE ( [Ingreso Bruto Total], [Millas Totales] )
+
+
+// --- 3.4 Objetivo y bandas del medidor ----------------------------------
+
+// UMBRALES CALIBRADOS CON TUS DATOS REALES, no con los de la imagen.
+// El margen mensual real de fhvhv va de 19.45% a 26.20% (36 meses).
+// Con los umbrales de la imagen (<12% / 12-16% / >16%) los 36 meses saldrian
+// verdes y los circulos no comunicarian nada.
+// Estos cortes reparten los 36 meses reales en 7 rojos / 18 ambar / 11 verdes.
+//
+// Los cortes son [0, 0.21) rojo, [0.21, 0.23) ambar, [0.23, ->) verde: mismos
+// intervalos semiabiertos que usan las reglas de iconos de la matriz
+// ("es >= x y es < y"). Si cambias un umbral aqui, cambialo en los 3 sitios:
+// Margen Banda, Margen Color y las reglas del visual.
+Margen Banda =
+VAR m = [Margen Promedio Plataforma]
+RETURN
+    SWITCH (
+        TRUE (),
+        ISBLANK ( m ), "n/d",
+        m < 0.21, "<21%",
+        m < 0.23, "21-23%",
+        ">=23%"
+    )
+
+// Color del icono de la matriz. Debe seguir el mismo corte que Margen Banda.
+Margen Color =
+VAR m = [Margen Promedio Plataforma]
+RETURN
+    SWITCH (
+        TRUE (),
+        ISBLANK ( m ), "#5A5A5A",
+        m < 0.21, "#E04B4B",
+        m < 0.23, "#E8B33C",
+        "#4CAF7D"
+    )
+
+// El ratio mensual real va de 73.80% a 80.55% (valor global: 77.74%).
+// 80% es un objetivo exigente pero alcanzado en 2023; la imagen usaba 85%,
+// que tus datos no rozan en ningun mes.
+Objetivo Ratio Conductor = 0.80
+
+Medidor Min = 0
+Medidor Max = 1
+
+// Color del arco del medidor. El medidor nativo de Power BI NO dibuja las 3
+// bandas de color de la imagen (solo tiene un relleno); esto es el
+// equivalente nativo: el arco entero cambia de color segun donde cae.
+Ratio Color =
+VAR r = [Ratio Pago Conductor]
+RETURN
+    SWITCH (
+        TRUE (),
+        ISBLANK ( r ), "#5A5A5A",
+        r < 0.76, "#E04B4B",
+        r < 0.80, "#E8B33C",
+        "#4CAF7D"
+    )
