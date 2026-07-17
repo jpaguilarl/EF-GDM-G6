@@ -11,7 +11,7 @@ router = APIRouter(prefix="/api/v1/panel", tags=["panel"])
 # --- Config ---
 
 @router.get("/config")
-async def get_config():
+def get_config():
     return config_io.read_config()
 
 
@@ -20,7 +20,7 @@ class ConfigUpdate(BaseModel):
 
 
 @router.put("/config")
-async def put_config(body: ConfigUpdate):
+def put_config(body: ConfigUpdate):
     try:
         config_io.write_config(body.updates)
         return {"status": "ok"}
@@ -29,7 +29,7 @@ async def put_config(body: ConfigUpdate):
 
 
 @router.get("/env")
-async def get_env():
+def get_env():
     return config_io.read_env()
 
 
@@ -38,7 +38,7 @@ class EnvUpdate(BaseModel):
 
 
 @router.put("/env")
-async def put_env(body: EnvUpdate):
+def put_env(body: EnvUpdate):
     try:
         config_io.write_env(body.updates)
         return {"status": "ok"}
@@ -126,12 +126,12 @@ async def post_gold_ml_job(body: GoldMlJobBody, request: Request):
 
 
 @router.get("/jobs")
-async def list_jobs(request: Request):
+def list_jobs(request: Request):
     return request.app.state.job_manager.list_jobs()
 
 
 @router.get("/jobs/{job_id}")
-async def get_job(job_id: str, request: Request):
+def get_job(job_id: str, request: Request):
     job = request.app.state.job_manager.get_job(job_id)
     if not job:
         raise HTTPException(404, detail="Job not found")
@@ -146,7 +146,7 @@ async def stream_job_logs(job_id: str, request: Request):
 
 
 @router.post("/jobs/{job_id}/stop")
-async def stop_job(job_id: str, request: Request):
+def stop_job(job_id: str, request: Request):
     ok = request.app.state.job_manager.stop(job_id)
     if not ok:
         raise HTTPException(404, detail="Job not found or already finished")
@@ -156,7 +156,7 @@ async def stop_job(job_id: str, request: Request):
 # --- Audit ---
 
 @router.get("/audit/lineage")
-async def get_audit_lineage(
+def get_audit_lineage(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     layer: str | None = Query(None, pattern="^(bronze|silver|gold)$"),
@@ -167,7 +167,7 @@ async def get_audit_lineage(
 
 
 @router.get("/audit/{layer}")
-async def get_audit(
+def get_audit(
     layer: str = Path(..., pattern="^(bronze|silver|gold)$"),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
@@ -180,14 +180,14 @@ async def get_audit(
 # --- Audit Summary ---
 
 @router.get("/audit/{layer}/summary")
-async def get_audit_summary(layer: str = Path(..., pattern="^(bronze|silver|gold)$")):
+def get_audit_summary(layer: str = Path(..., pattern="^(bronze|silver|gold)$")):
     return audit_reader.read_audit_summary(layer)
 
 
 # --- Marts Summary ---
 
 @router.get("/marts/{mart}/summary")
-async def get_mart_summary(
+def get_mart_summary(
     request: Request,
     mart: str,
     year: list[int] | None = Query(None),
@@ -201,22 +201,30 @@ async def get_mart_summary(
 # --- ML ---
 
 @router.get("/ml/kmodes/{service_id}")
-async def get_kmodes(service_id: str):
+def get_kmodes(service_id: str):
     return ml_reader.kmodes_summary(service_id)
 
 
 @router.get("/ml/isolation/summary")
-async def get_isolation_summary():
+def get_isolation_summary():
     return ml_reader.isolation_summary()
 
 
 @router.get("/ml/isolation")
-async def get_isolation_list():
+def get_isolation_list():
     return ml_reader.isolation_list()
 
 
+@router.get("/ml/isolation/scatter")
+def get_isolation_scatter(
+    ratecode: str | None = Query(None),
+    limit: int = Query(500, ge=100, le=10000),
+):
+    return ml_reader.isolation_scatter(ratecode=ratecode, limit=limit)
+
+
 @router.get("/ml/isolation/{ratecode}/scores")
-async def get_isolation_scores(
+def get_isolation_scores(
     ratecode: str,
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
@@ -225,17 +233,21 @@ async def get_isolation_scores(
 
 
 @router.get("/ml/sarimax/forecast")
-async def get_sarimax_forecast(
-    limit: int = Query(100, ge=1, le=1000),
+def get_sarimax_forecast(
+    limit: int = Query(100, ge=1, le=5000),
     offset: int = Query(0, ge=0),
     borough: str | None = Query(None),
     service_id: str | None = Query(None),
+    start_date: str | None = Query(None),
+    end_date: str | None = Query(None),
+    grain: str = Query("hourly"),
 ):
     return ml_reader.sarimax_forecast(
-        limit=limit, offset=offset, borough=borough, service_id=service_id
+        limit=limit, offset=offset, borough=borough, service_id=service_id,
+        start=start_date, end=end_date, grain=grain,
     )
 
 
 @router.get("/ml/sarimax/summary")
-async def get_sarimax_summary():
+def get_sarimax_summary():
     return ml_reader.sarimax_summary()

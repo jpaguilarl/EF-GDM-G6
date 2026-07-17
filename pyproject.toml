@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.139.0",
+    "fastparquet>=2026.5.0",
     "httpx>=0.28.1",
     "ipykernel>=7.3.0",
     "joblib>=1.4.0",

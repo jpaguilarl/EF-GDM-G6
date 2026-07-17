@@ -12,7 +12,16 @@ async function ingestTrip(body: unknown) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  return res.json();
+  const text = await res.text();
+  let parsed: unknown = null;
+  try { parsed = JSON.parse(text); } catch { /* non-JSON (502/HTML) */ }
+  if (!res.ok) {
+    const detail = parsed
+      ? JSON.stringify(parsed)
+      : text || res.statusText;
+    throw new Error(`${res.status} ${detail}`);
+  }
+  return (parsed ?? { status: "error", message: "empty response" }) as Record<string, unknown>;
 }
 
 interface IngestFormProps {

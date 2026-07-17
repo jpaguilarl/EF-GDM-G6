@@ -4,8 +4,14 @@ import time
 from pathlib import Path
 
 import polars as pl
+from polars import ScanCastOptions
 
 from app.utils.logger import Logger
+
+
+_SCAN_CAST_OPTS = ScanCastOptions(
+    integer_cast="allow-float",
+)
 
 
 class PolarsQueryEngine:
@@ -32,7 +38,7 @@ class PolarsQueryEngine:
             self._cache.pop(name, None)
             return None
         try:
-            scan = pl.scan_parquet(f"{mart_dir}/**/*.parquet", hive_partitioning=True)
+            scan = pl.scan_parquet(f"{mart_dir}/**/*.parquet", hive_partitioning=True, cast_options=_SCAN_CAST_OPTS)
         except Exception:
             self.logger.warning(
                 f"Mart '{name}' no tiene archivos parquet: {mart_dir}"
