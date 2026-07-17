@@ -34,7 +34,7 @@ with DAG(
 
     sarimax = BashOperator(
         task_id="gold_ml_sarimax",
-        bash_command=bash_command("--gold-ml sarimax"),
+        bash_command=bash_command("--gold-ml sarimax --forecast-until 2026"),
     )
 
     kmodes >> isolation >> sarimax
