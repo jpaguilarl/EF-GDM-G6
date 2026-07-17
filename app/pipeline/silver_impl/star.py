@@ -191,8 +191,11 @@ class StarSchemaBuilder:
                     for m in range(1, 13):
                         tasks.append((cat, year, m))
             elif isinstance(year, Module):
-                for m in range(1, 13):
-                    tasks.append((year.category, year.year, m))
+                if year.month is not None:
+                    tasks.append((year.category, year.year, year.month))
+                else:
+                    for m in range(1, 13):
+                        tasks.append((year.category, year.year, m))
 
         heavy_cats = {"fhvhv", "yellow"}
         heavy_tasks = [t for t in tasks if t[0] in heavy_cats]

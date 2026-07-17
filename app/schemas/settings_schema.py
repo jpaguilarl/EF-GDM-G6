@@ -22,7 +22,7 @@ class StorageConfig(BaseModel):
 class Module(BaseModel):
     category: str
     year: int
-    month: int
+    month: int | None = None
 
 
 class DatasetsConfig(BaseModel):
@@ -59,6 +59,7 @@ class SariMaxConfig(BaseModel):
     seasonal_order: list[int] = [1, 1, 1, 24]
     min_rows_per_segment: int = 1000
     forecast_horizon_hours: int = 168
+    forecast_until_year: int | None = None
 
 
 class KmodesConfig(BaseModel):
@@ -74,6 +75,7 @@ class SpeedConfig(BaseModel):
     state_ttl_hours: int = 48
     fraud_score_threshold: float = -0.1
     block_minutes: int = 15
+    timeliness_lookback_days: int = 30
 
 
 class ServingConfig(BaseModel):

@@ -203,3 +203,22 @@ class TestTippingBehavior:
     def test_filter_categoria(self, client):
         resp = client.get("/api/v1/historic/tipping-behavior?categoria_generosidad=Estandar")
         assert resp.status_code == 200
+
+    def test_summary(self, client):
+        resp = client.get("/api/v1/panel/marts/mart_tipping_behavior/summary")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "total" in data
+        assert data["total"]["pct_propina_promedio"] == 14.5
+        assert data["total"]["propina_prom_por_milla"] == 1.5
+        assert data["total"]["viajes"] == 30
+        assert data["total"]["pct_viajes_sin_propina"] == 16.67
+        assert len(data["by_borough_origin"]) == 1
+        assert data["by_borough_origin"][0]["pu_borough"] == "Manhattan"
+        assert data["by_borough_origin"][0]["viajes"] == 30
+        assert len(data["by_borough_destination"]) == 1
+        assert data["by_borough_destination"][0]["do_borough"] == "Brooklyn"
+        assert data["by_borough_destination"][0]["viajes"] == 30
+        assert len(data["generosity_by_service"]) == 1
+        assert data["generosity_by_service"][0]["service_id"] == "yellow"
+        assert data["generosity_by_service"][0]["categoria_generosidad"] == "Estandar"

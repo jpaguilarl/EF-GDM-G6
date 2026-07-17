@@ -285,3 +285,34 @@ async def stream_abc_xyz(
     request: Request = None,
 ):
     return await _stream_view(request, "abc-xyz", service_id, pu_location_id)
+
+
+@router.get("/fraud")
+async def get_fraud(
+    service_id: list[str] | None = Query(None),
+    is_fraud: bool | None = Query(None),
+    ratecode_id: list[int] | None = Query(None),
+    limit: int = Query(100, le=10_000),
+    offset: int = Query(0, ge=0),
+    request: Request = None,
+):
+    reader: MergedViewReader = request.app.state.merged_reader
+    return await reader.read_fraud(
+        limit=limit, offset=offset,
+        service_id=service_id, is_fraud=is_fraud, ratecode_id=ratecode_id,
+    )
+
+
+@router.get("/clusters")
+async def get_clusters(
+    service_id: list[str] | None = Query(None),
+    cluster_id: list[int] | None = Query(None),
+    limit: int = Query(100, le=10_000),
+    offset: int = Query(0, ge=0),
+    request: Request = None,
+):
+    reader: MergedViewReader = request.app.state.merged_reader
+    return await reader.read_clusters(
+        limit=limit, offset=offset,
+        service_id=service_id, cluster_id=cluster_id,
+    )

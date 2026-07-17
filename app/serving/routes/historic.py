@@ -53,6 +53,7 @@ async def get_demand_volume(
     fecha_viaje: str | None = Query(None),
     pu_location_id: list[int] | None = Query(None),
     limit: int = Query(1000, le=100_000),
+    offset: int = Query(0, ge=0),
     request: Request = None,
 ):
     engine: PolarsQueryEngine = request.app.state.engine
@@ -63,8 +64,29 @@ async def get_demand_volume(
         fecha_viaje=fecha_viaje,
         pu_location_id=pu_location_id,
     )
-    df = engine.query("mart_demand_volume", filters=filters, limit=limit)
+    df = engine.query("mart_demand_volume", filters=filters, limit=limit, offset=offset)
     return _to_response(df, limit)
+
+
+@router.get("/demand-volume/count")
+async def get_demand_volume_count(
+    service_id: list[str] | None = Query(None),
+    year: list[int] | None = Query(None),
+    month: list[int] | None = Query(None),
+    fecha_viaje: str | None = Query(None),
+    pu_location_id: list[int] | None = Query(None),
+    request: Request = None,
+):
+    engine: PolarsQueryEngine = request.app.state.engine
+    filters = _build_filters(
+        service_id=service_id,
+        year=year,
+        month=month,
+        fecha_viaje=fecha_viaje,
+        pu_location_id=pu_location_id,
+    )
+    total = engine.count("mart_demand_volume", filters=filters)
+    return {"total": total}
 
 
 @router.get("/financial-performance")
@@ -75,6 +97,7 @@ async def get_financial_performance(
     fecha_viaje: str | None = Query(None),
     bloque_horario: list[str] | None = Query(None),
     limit: int = Query(1000, le=100_000),
+    offset: int = Query(0, ge=0),
     request: Request = None,
 ):
     engine: PolarsQueryEngine = request.app.state.engine
@@ -85,8 +108,29 @@ async def get_financial_performance(
         fecha_viaje=fecha_viaje,
         bloque_horario=bloque_horario,
     )
-    df = engine.query("mart_financial_performance", filters=filters, limit=limit)
+    df = engine.query("mart_financial_performance", filters=filters, limit=limit, offset=offset)
     return _to_response(df, limit)
+
+
+@router.get("/financial-performance/count")
+async def get_financial_performance_count(
+    service_id: list[str] | None = Query(None),
+    year: list[int] | None = Query(None),
+    month: list[int] | None = Query(None),
+    fecha_viaje: str | None = Query(None),
+    bloque_horario: list[str] | None = Query(None),
+    request: Request = None,
+):
+    engine: PolarsQueryEngine = request.app.state.engine
+    filters = _build_filters(
+        service_id=service_id,
+        year=year,
+        month=month,
+        fecha_viaje=fecha_viaje,
+        bloque_horario=bloque_horario,
+    )
+    total = engine.count("mart_financial_performance", filters=filters)
+    return {"total": total}
 
 
 @router.get("/operational-profile")
@@ -97,6 +141,7 @@ async def get_operational_profile(
     fecha_viaje: str | None = Query(None),
     pu_location_id: list[int] | None = Query(None),
     limit: int = Query(1000, le=100_000),
+    offset: int = Query(0, ge=0),
     request: Request = None,
 ):
     engine: PolarsQueryEngine = request.app.state.engine
@@ -107,8 +152,29 @@ async def get_operational_profile(
         fecha_viaje=fecha_viaje,
         pu_location_id=pu_location_id,
     )
-    df = engine.query("mart_operational_profile", filters=filters, limit=limit)
+    df = engine.query("mart_operational_profile", filters=filters, limit=limit, offset=offset)
     return _to_response(df, limit)
+
+
+@router.get("/operational-profile/count")
+async def get_operational_profile_count(
+    service_id: list[str] | None = Query(None),
+    year: list[int] | None = Query(None),
+    month: list[int] | None = Query(None),
+    fecha_viaje: str | None = Query(None),
+    pu_location_id: list[int] | None = Query(None),
+    request: Request = None,
+):
+    engine: PolarsQueryEngine = request.app.state.engine
+    filters = _build_filters(
+        service_id=service_id,
+        year=year,
+        month=month,
+        fecha_viaje=fecha_viaje,
+        pu_location_id=pu_location_id,
+    )
+    total = engine.count("mart_operational_profile", filters=filters)
+    return {"total": total}
 
 
 @router.get("/supply-demand-balance")
@@ -118,6 +184,7 @@ async def get_supply_demand_balance(
     month: list[int] | None = Query(None),
     bloque_temporal_t: str | None = Query(None),
     limit: int = Query(1000, le=100_000),
+    offset: int = Query(0, ge=0),
     request: Request = None,
 ):
     engine: PolarsQueryEngine = request.app.state.engine
@@ -127,8 +194,27 @@ async def get_supply_demand_balance(
         month=month,
         bloque_temporal_t=bloque_temporal_t,
     )
-    df = engine.query("mart_supply_demand_balance", filters=filters, limit=limit)
+    df = engine.query("mart_supply_demand_balance", filters=filters, limit=limit, offset=offset)
     return _to_response(df, limit)
+
+
+@router.get("/supply-demand-balance/count")
+async def get_supply_demand_balance_count(
+    borough: list[str] | None = Query(None),
+    year: list[int] | None = Query(None),
+    month: list[int] | None = Query(None),
+    bloque_temporal_t: str | None = Query(None),
+    request: Request = None,
+):
+    engine: PolarsQueryEngine = request.app.state.engine
+    filters = _build_filters(
+        borough=borough,
+        year=year,
+        month=month,
+        bloque_temporal_t=bloque_temporal_t,
+    )
+    total = engine.count("mart_supply_demand_balance", filters=filters)
+    return {"total": total}
 
 
 @router.get("/abc-xyz-zones")
@@ -137,6 +223,7 @@ async def get_abc_xyz_zones(
     year: list[int] | None = Query(None),
     pu_location_id: list[int] | None = Query(None),
     limit: int = Query(1000, le=100_000),
+    offset: int = Query(0, ge=0),
     request: Request = None,
 ):
     engine: PolarsQueryEngine = request.app.state.engine
@@ -145,8 +232,25 @@ async def get_abc_xyz_zones(
         year=year,
         pu_location_id=pu_location_id,
     )
-    df = engine.query("mart_abc_xyz_zones", filters=filters, limit=limit)
+    df = engine.query("mart_abc_xyz_zones", filters=filters, limit=limit, offset=offset)
     return _to_response(df, limit)
+
+
+@router.get("/abc-xyz-zones/count")
+async def get_abc_xyz_zones_count(
+    service_id: list[str] | None = Query(None),
+    year: list[int] | None = Query(None),
+    pu_location_id: list[int] | None = Query(None),
+    request: Request = None,
+):
+    engine: PolarsQueryEngine = request.app.state.engine
+    filters = _build_filters(
+        service_id=service_id,
+        year=year,
+        pu_location_id=pu_location_id,
+    )
+    total = engine.count("mart_abc_xyz_zones", filters=filters)
+    return {"total": total}
 
 
 @router.get("/tipping-behavior")
@@ -157,6 +261,7 @@ async def get_tipping_behavior(
     fecha_viaje: str | None = Query(None),
     categoria_generosidad: list[str] | None = Query(None),
     limit: int = Query(1000, le=100_000),
+    offset: int = Query(0, ge=0),
     request: Request = None,
 ):
     engine: PolarsQueryEngine = request.app.state.engine
@@ -167,5 +272,26 @@ async def get_tipping_behavior(
         fecha_viaje=fecha_viaje,
         categoria_generosidad=categoria_generosidad,
     )
-    df = engine.query("mart_tipping_behavior", filters=filters, limit=limit)
+    df = engine.query("mart_tipping_behavior", filters=filters, limit=limit, offset=offset)
     return _to_response(df, limit)
+
+
+@router.get("/tipping-behavior/count")
+async def get_tipping_behavior_count(
+    service_id: list[str] | None = Query(None),
+    year: list[int] | None = Query(None),
+    month: list[int] | None = Query(None),
+    fecha_viaje: str | None = Query(None),
+    categoria_generosidad: list[str] | None = Query(None),
+    request: Request = None,
+):
+    engine: PolarsQueryEngine = request.app.state.engine
+    filters = _build_filters(
+        service_id=service_id,
+        year=year,
+        month=month,
+        fecha_viaje=fecha_viaje,
+        categoria_generosidad=categoria_generosidad,
+    )
+    total = engine.count("mart_tipping_behavior", filters=filters)
+    return {"total": total}

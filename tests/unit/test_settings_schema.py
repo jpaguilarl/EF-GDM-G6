@@ -73,6 +73,15 @@ def test_sarimax_default():
     assert cfg.seasonal_order == [1, 1, 1, 24]
     assert cfg.min_rows_per_segment == 1000
     assert cfg.forecast_horizon_hours == 168
+    assert cfg.forecast_until_year is None
+
+
+def test_sarimax_forecast_until_year():
+    cfg = SariMaxConfig(forecast_until_year=2027)
+    assert cfg.forecast_until_year == 2027
+
+    cfg = SariMaxConfig(forecast_until_year=None)
+    assert cfg.forecast_until_year is None
 
 
 def test_kmodes_default():

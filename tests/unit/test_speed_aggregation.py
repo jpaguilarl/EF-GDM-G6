@@ -226,6 +226,34 @@ class TestOperationalProfile:
         distancia = await redis_client.redis.hget(op_key, "distancia_total_millas")
         assert float(distancia) == pytest.approx(5.0)
 
+    async def test_shared_request_Y_increments(self, aggregator, redis_client):
+        ride = _ride_with_flags(shared_request_flag="Y")
+        await aggregator.on_event(ride)
+        op_key = _op_key_for(ride)
+        solicitud = await redis_client.redis.hget(op_key, "solicitud_compartida")
+        assert solicitud == "1"
+
+    async def test_shared_request_N_does_not_increment(self, aggregator, redis_client):
+        ride = _ride_with_flags(shared_request_flag="N")
+        await aggregator.on_event(ride)
+        op_key = _op_key_for(ride)
+        solicitud = await redis_client.redis.hget(op_key, "solicitud_compartida")
+        assert solicitud is None
+
+    async def test_shared_match_Y_increments(self, aggregator, redis_client):
+        ride = _ride_with_flags(shared_match_flag="Y")
+        await aggregator.on_event(ride)
+        op_key = _op_key_for(ride)
+        match_ = await redis_client.redis.hget(op_key, "match_compartido")
+        assert match_ == "1"
+
+    async def test_shared_match_N_does_not_increment(self, aggregator, redis_client):
+        ride = _ride_with_flags(shared_match_flag="N")
+        await aggregator.on_event(ride)
+        op_key = _op_key_for(ride)
+        match_ = await redis_client.redis.hget(op_key, "match_compartido")
+        assert match_ is None
+
 
 class TestSupplyDemand:
     async def test_pickup_creates_salientes(self, aggregator, ride, redis_client):
@@ -272,3 +300,38 @@ class TestRedisKeys:
         for key in all_keys:
             ttl = await redis_client.redis.ttl(key)
             assert 0 < ttl <= 48 * 3600, f"Key {key} has no TTL"
+
+
+def _ride_with_flags(
+    shared_request_flag: str | None = None,
+    shared_match_flag: str | None = None,
+) -> EnrichedRide:
+    return EnrichedRide(
+        trip_id=999,
+        service_id="fhvhv",
+        pickup_datetime=datetime(2025, 6, 15, 10, 30, 0),
+        dropoff_datetime=datetime(2025, 6, 15, 10, 45, 0),
+        pu_location_id=237,
+        do_location_id=238,
+        pu_borough="Manhattan",
+        pu_zone="Midtown",
+        do_borough="Brooklyn",
+        do_zone="Williamsburg",
+        bloque_horario="Mediodía",
+        franja_horaria="Mañana",
+        dia_categoria="Día Laborable",
+        is_weekend=False,
+        pickup_hour=10,
+        trip_duration_minutes=15.0,
+        passenger_group="Solo",
+        revenue=25.0,
+        trip_distance=5.0,
+        fare_amount=15.0,
+        tolls_amount=2.5,
+        shared_request_flag=shared_request_flag,
+        shared_match_flag=shared_match_flag,
+    )
+
+
+def _op_key_for(ride: EnrichedRide) -> str:
+    return f"rt:op:{ride.service_id}:{ride.pickup_datetime.date()}:{ride.bloque_horario}:{ride.pu_location_id}"
