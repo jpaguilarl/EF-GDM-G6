@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -102,7 +102,7 @@ function AbcXyzDashboard({ summary, isLoading }: Props) {
     return m;
   }, [scatter]);
 
-  const geoStyle = (feature: any) => {
+  const geoStyle = useCallback((feature: any) => {
     const locId = feature.properties.LocationID;
     const info = zoneClassMap[locId];
     const cls = info?.clase;
@@ -113,9 +113,9 @@ function AbcXyzDashboard({ summary, isLoading }: Props) {
       color: "#5c403b",
       fillOpacity: cls ? 0.8 : 0.15,
     };
-  };
+  }, [zoneClassMap]);
 
-  const onEachGeo = (feature: any, layer: any) => {
+  const onEachGeo = useCallback((feature: any, layer: any) => {
     const locId = feature.properties.LocationID;
     const info = zoneClassMap[locId];
     const props = feature.properties;
@@ -130,7 +130,7 @@ function AbcXyzDashboard({ summary, isLoading }: Props) {
         { sticky: true },
       );
     }
-  };
+  }, [zoneClassMap]);
 
   if (isLoading) {
     return <div className="text-center py-20 text-on-surface-variant">Cargando dashboard...</div>;

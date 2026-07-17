@@ -9,6 +9,7 @@ import {
 import { MapContainer, TileLayer, GeoJSON } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import { SummaryCard } from "./SummaryCard";
+import { ChartCard } from "./ChartCard";
 import type { MartSummary } from "../lib/types";
 
 interface Props {
@@ -222,15 +223,6 @@ function DemandVolumeDashboard({ summary, isLoading }: Props) {
           )}
         </div>
       </ChartCard>
-    </div>
-  );
-}
-
-function ChartCard({ title, className, children }: { title: string; className?: string; children: React.ReactNode }) {
-  return (
-    <div className={`bg-surface-container-lowest border border-border-subtle rounded-DEFAULT p-6 ${className ?? ""}`}>
-      <h4 className="text-label-md text-on-surface-variant uppercase tracking-wide mb-4">{title}</h4>
-      {children}
     </div>
   );
 }

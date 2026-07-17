@@ -1,19 +1,24 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceArea, ReferenceLine } from "recharts";
 import { Calendar, Layers, TrendingUp, Table2, ChevronDown, ChevronUp } from "lucide-react";
 import { apiGet } from "../lib/api";
-import type { SarimaxSummary } from "../lib/types";
+import type { SarimaxSummary, SarimaxForecastRow } from "../lib/types";
 import { SummaryCard } from "./SummaryCard";
 
-interface SarimaxRow {
-  [key: string]: unknown;
+interface ChartRow {
+  pickup_hour: string;
+  trip_count: number | null;
+  yhat_historico: number | null;
+  yhat_pronostico: number | null;
 }
 
 export function SarimaxViewer() {
   const [showTable, setShowTable] = useState(false);
   const [borough, setBorough] = useState<string>("");
   const [serviceId, setServiceId] = useState<string>("");
+  const [startDate, setStartDate] = useState<string>("2024-01-01");
+  const [endDate, setEndDate] = useState<string>("2026-06-30");
 
   const { data: summary, isLoading: summaryLoading } = useQuery<SarimaxSummary>({
     queryKey: ["sarimax-summary"],
@@ -32,25 +37,43 @@ export function SarimaxViewer() {
       )].sort()
     : [];
 
-  const { data, isLoading } = useQuery<{ rows: SarimaxRow[]; total: number }>({
-    queryKey: ["sarimax", borough, serviceId],
+  const { data, isLoading } = useQuery<{ rows: SarimaxForecastRow[]; total: number }>({
+    queryKey: ["sarimax", borough, serviceId, startDate, endDate],
     queryFn: () => {
-      let url = "/ml/sarimax/forecast?limit=500&offset=0";
+      let url = "/ml/sarimax/forecast?limit=5000&offset=0&grain=daily";
       if (borough) url += `&borough=${encodeURIComponent(borough)}`;
       if (serviceId) url += `&service_id=${encodeURIComponent(serviceId)}`;
-      return apiGet<{ rows: SarimaxRow[]; total: number }>(url);
+      if (startDate) url += `&start_date=${encodeURIComponent(startDate)}`;
+      if (endDate) url += `&end_date=${encodeURIComponent(endDate)}`;
+      return apiGet<{ rows: SarimaxForecastRow[]; total: number }>(url);
     },
     enabled: true,
   });
 
   const displayData = data?.rows ?? [];
   const hasData = displayData.length > 0;
-  const sample = hasData ? displayData[0] : {} as SarimaxRow;
-  const keys = Object.keys(sample);
-  const timeCol = keys.find(
-    (k) => k.toLowerCase().includes("time") || k.toLowerCase().includes("date") || k.toLowerCase().includes("fecha") || k.toLowerCase().includes("pickup") || k.toLowerCase().includes("ds")
-  ) || keys[0] || "pickup_hour";
-  const numCols = keys.filter((k) => k !== timeCol && typeof sample[k] === "number").slice(0, 5);
+
+  const chartData: ChartRow[] = useMemo(() => displayData.map(r => ({
+    pickup_hour: r.pickup_hour,
+    trip_count: r.trip_count,
+    yhat_historico: r.forecast_type === "actual" ? r.yhat : null,
+    yhat_pronostico: r.forecast_type === "forecast" ? r.yhat : null,
+  })), [displayData]);
+
+  const boundaryTs = useMemo(() => {
+    if (!hasData) return null;
+    // First day where forecast yhat overtakes historical yhat
+    for (const row of chartData) {
+      if (row.yhat_pronostico !== null &&
+          (row.yhat_historico === null || row.yhat_pronostico >= row.yhat_historico)) {
+        return row.pickup_hour;
+      }
+    }
+    return null;
+  }, [chartData, hasData]);
+
+  const minTs = hasData ? displayData[0].pickup_hour : "";
+  const maxTs = hasData ? displayData[displayData.length - 1].pickup_hour : "";
 
   return (
     <div className="space-y-6">
@@ -98,9 +121,27 @@ export function SarimaxViewer() {
             ))}
           </select>
         </div>
-        {(borough || serviceId) && (
+        <div className="space-y-1">
+          <label className="text-caption text-on-surface-variant uppercase tracking-wide">Desde</label>
+          <input
+            type="date"
+            value={startDate}
+            onChange={(e) => setStartDate(e.target.value)}
+            className="block px-3 py-2 rounded-DEFAULT border border-border-subtle bg-surface-container-lowest text-on-surface text-sm min-w-[160px]"
+          />
+        </div>
+        <div className="space-y-1">
+          <label className="text-caption text-on-surface-variant uppercase tracking-wide">Hasta</label>
+          <input
+            type="date"
+            value={endDate}
+            onChange={(e) => setEndDate(e.target.value)}
+            className="block px-3 py-2 rounded-DEFAULT border border-border-subtle bg-surface-container-lowest text-on-surface text-sm min-w-[160px]"
+          />
+        </div>
+        {(borough || serviceId || startDate || endDate) && (
           <button
-            onClick={() => { setBorough(""); setServiceId(""); }}
+            onClick={() => { setBorough(""); setServiceId(""); setStartDate("2024-01-01"); setEndDate("2026-06-30"); }}
             className="px-3 py-2 rounded-DEFAULT text-label-md text-on-surface-variant border border-border-subtle hover:bg-surface-muted transition-colors"
           >
             Limpiar filtros
@@ -123,24 +164,72 @@ export function SarimaxViewer() {
               )}
             </h3>
             <ResponsiveContainer width="100%" height={400}>
-              <LineChart data={displayData as any[]} margin={{ top: 5, right: 20, left: 20, bottom: 5 }}>
+              <LineChart data={chartData} margin={{ top: 20, right: 20, left: 20, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
-                <XAxis dataKey={timeCol} tick={{ fontSize: 11 }} angle={-45} textAnchor="end" height={60} />
+                <XAxis
+                  dataKey="pickup_hour"
+                  tick={{ fontSize: 11 }}
+                  angle={-45}
+                  textAnchor="end"
+                  height={60}
+                  tickFormatter={(v: string) => {
+                    const d = new Date(v);
+                    return d.toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "2-digit" });
+                  }}
+                />
                 <YAxis />
-                <Tooltip />
+                <Tooltip
+                  labelFormatter={(v) => {
+                    if (typeof v !== "string") return "";
+                    const d = new Date(v);
+                    return d.toLocaleDateString("es-ES", { day: "2-digit", month: "long", year: "numeric" });
+                  }}
+                />
                 <Legend />
-                {numCols.map((col, i) => (
-                  <Line
-                    key={col}
-                    type="monotone"
-                    dataKey={col}
-                    stroke={["#a00003", "#415f8e", "#004aa0", "#5c403b", "#916f6a"][i % 5]}
-                    strokeWidth={2}
-                    dot={false}
-                    connectNulls
-                    name={col}
-                  />
-                ))}
+                {/* Background bands for sections */}
+                {boundaryTs && (
+                  <>
+                    <ReferenceArea x1={minTs} x2={boundaryTs} fill="#f3f4f6" fillOpacity={0.5} label={{ value: "Histórico", position: "insideTopLeft", fill: "#6b7280", fontSize: 12 }} />
+                    <ReferenceArea x1={boundaryTs} x2={maxTs} fill="#dbeafe" fillOpacity={0.5} label={{ value: "Pronóstico", position: "insideTopLeft", fill: "#1d4ed8", fontSize: 12 }} />
+                    <ReferenceLine x={boundaryTs} stroke="#1d4ed8" strokeDasharray="4 4" />
+                  </>
+                )}
+                {/* No boundary — all data is one type */}
+                {!boundaryTs && hasData && (
+                  displayData[0].forecast_type === "forecast" ? (
+                    <ReferenceArea x1={minTs} x2={maxTs} fill="#dbeafe" fillOpacity={0.5} label={{ value: "Pronóstico", position: "insideTopLeft", fill: "#1d4ed8", fontSize: 12 }} />
+                  ) : (
+                    <ReferenceArea x1={minTs} x2={maxTs} fill="#f3f4f6" fillOpacity={0.5} label={{ value: "Histórico", position: "insideTopLeft", fill: "#6b7280", fontSize: 12 }} />
+                  )
+                )}
+                <Line
+                  type="monotone"
+                  dataKey="trip_count"
+                  stroke="#1f2937"
+                  strokeWidth={1.5}
+                  dot={false}
+                  connectNulls={false}
+                  name="Viajes reales"
+                />
+                <Line
+                  type="monotone"
+                  dataKey="yhat_historico"
+                  stroke="#a00003"
+                  strokeWidth={2}
+                  dot={false}
+                  connectNulls={false}
+                  name="Histórico (yhat)"
+                />
+                <Line
+                  type="monotone"
+                  dataKey="yhat_pronostico"
+                  stroke="#415f8e"
+                  strokeDasharray="5 5"
+                  strokeWidth={2}
+                  dot={false}
+                  connectNulls={false}
+                  name="Pronóstico (yhat)"
+                />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -164,7 +253,7 @@ export function SarimaxViewer() {
                 <table className="w-full text-body-sm">
                   <thead>
                     <tr className="border-b border-border-subtle text-label-md text-on-surface-variant uppercase sticky top-0 bg-surface-container-lowest">
-                      {keys.map((col) => (
+                      {hasData && Object.keys(displayData[0]).map((col) => (
                         <th key={col} className="px-3 py-2 text-left whitespace-nowrap">{col}</th>
                       ))}
                     </tr>
@@ -172,8 +261,8 @@ export function SarimaxViewer() {
                   <tbody>
                     {displayData.map((row, i) => (
                       <tr key={i} className={`border-b border-border-subtle ${i % 2 === 0 ? "bg-surface-container-lowest" : "bg-surface-muted"}`}>
-                        {keys.map((col) => (
-                          <td key={col} className="px-3 py-2 tabular-nums">{String(row[col] ?? "")}</td>
+                        {hasData && Object.keys(displayData[0]).map((col) => (
+                          <td key={col} className="px-3 py-2 tabular-nums">{String(row[col as keyof SarimaxForecastRow] ?? "")}</td>
                         ))}
                       </tr>
                     ))}
