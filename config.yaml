@@ -1,16 +1,17 @@
 storage:
-  backend: "local"
-
+  backend: local
 datasets:
-  years: [2023, 2024, 2025]
-
+  years:
+  - 2023
+  - 2024
+  - 2025
 gold:
   mode: full
   supply_demand:
     block_minutes: 15
     deficit_threshold: -10
   abc_xyz:
-    class_a_pct: 0.80
+    class_a_pct: 0.8
     class_b_pct: 0.15
     xyz_x_max: 0.2
     xyz_y_max: 0.5
@@ -29,14 +30,12 @@ gold:
     n_init: 2
     init_method: Cao
     random_state: 42
-
 speed:
-  redis_url: "redis://localhost:6379/0"
+  redis_url: redis://localhost:6379/0
   state_ttl_hours: 48
   fraud_score_threshold: -0.1
   block_minutes: 15
-
 serving:
-  host: "0.0.0.0"
+  host: 0.0.0.0
   port: 8000
   query_cache_ttl_seconds: 60

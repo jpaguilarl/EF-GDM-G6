@@ -90,8 +90,11 @@ class SilverPipeline:
                     for m in range(1, 13):
                         tasks.append((cat, year, m))
             elif isinstance(year, Module):
-                for m in range(1, 13):
-                    tasks.append((year.category, year.year, m))
+                if year.month is not None:
+                    tasks.append((year.category, year.year, year.month))
+                else:
+                    for m in range(1, 13):
+                        tasks.append((year.category, year.year, m))
         return tasks
 
     def run_schema(self) -> None:

@@ -77,9 +77,9 @@ class RealtimeAggregator:
             pipe.hincrbyfloat(key, "millas_validas_sum", ride.trip_miles)
         if ride.trip_duration_minutes is not None:
             pipe.hincrbyfloat(key, "horas_validas_sum", ride.trip_duration_minutes / 60.0)
-        if ride.shared_request_flag is not None:
+        if ride.shared_request_flag == "Y":
             pipe.hincrby(key, "solicitud_compartida", 1)
-        if ride.shared_match_flag is not None:
+        if ride.shared_match_flag == "Y":
             pipe.hincrby(key, "match_compartido", 1)
         pipe.expire(key, self.redis._ttl)
         await pipe.execute()

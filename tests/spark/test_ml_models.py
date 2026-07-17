@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from pyspark.sql import Row
+from pyspark.sql import functions as F
 
 
 # ============================================================================
@@ -423,7 +424,7 @@ def test_sarimax_normal_training(spark, settings, monkeypatch, tmp_path):
     assert result > 0
     forecast_dir = tmp_ml / "ml_sarimax_trips_forecast"
     assert (forecast_dir / "borough=Manhattan" / "service_id=yellow").exists()
-    assert (tmp_gold / "models" / "sarimax" / "Manhattan__yellow" / "model.joblib").exists()
+    assert (tmp_gold / "models" / "sarimax" / "Manhattan__yellow" / "model.pkl").exists()
 
 
 def test_sarimax_missing_feature_store(monkeypatch, settings, tmp_path):
@@ -529,3 +530,95 @@ def test_sarimax_fallback_order(spark, settings, monkeypatch, tmp_path):
     assert statuses & {"ok", "fallback_order"}, (
         f"Expected ok or fallback_order, got {statuses}"
     )
+
+
+def test_sarimax_future_forecast(spark, settings, monkeypatch, tmp_path):
+    tmp_gold = tmp_path
+    tmp_ml = tmp_gold / "ml"
+    tmp_ml.mkdir(parents=True)
+    _patch_sarimax(monkeypatch, tmp_gold, tmp_ml)
+
+    from app.pipeline.gold_impl.ml.sarimax_model import SariMaxModelPipeline
+
+    rows = _sarimax_rows(200, "Manhattan", "yellow")
+
+    feat_dir = tmp_ml / "ml_feat_arima_trips"
+    feat_dir.mkdir(parents=True)
+    spark.createDataFrame(rows).write.mode("overwrite").parquet(str(feat_dir))
+
+    cfg = settings.model_copy(deep=True)
+    cfg.gold.sarimax.forecast_until_year = 2024
+    pipeline = SariMaxModelPipeline(cfg)
+    result = pipeline.run()
+
+    assert result > 0
+    forecast_dir = tmp_ml / "ml_sarimax_trips_forecast"
+    scores_df = spark.read.parquet(str(forecast_dir))
+
+    columns = set(scores_df.columns)
+    assert "forecast_type" in columns, "forecast_type column missing"
+
+    types = [r["forecast_type"] for r in scores_df.select("forecast_type").distinct().collect()]
+    assert "forecast" in types
+    assert "actual" in types
+
+    future_rows = scores_df.filter(F.col("forecast_type") == "forecast").collect()
+    assert len(future_rows) > 0, "No future forecast rows generated"
+    assert all(r["trip_count"] is None for r in future_rows), "Future rows should have null trip_count"
+
+    actual_rows = scores_df.filter(F.col("forecast_type") == "actual").collect()
+    assert all(r["trip_count"] is not None for r in actual_rows), "Actual rows should have non-null trip_count"
+
+    max_hour = max(r["pickup_hour"] for r in future_rows)
+    assert max_hour.year == 2024, f"Expected max year 2024, got {max_hour.year}"
+
+
+def test_sarimax_future_forecast_idempotency(spark, settings, monkeypatch, tmp_path):
+    tmp_gold = tmp_path
+    tmp_ml = tmp_gold / "ml"
+    tmp_ml.mkdir(parents=True)
+    _patch_sarimax(monkeypatch, tmp_gold, tmp_ml)
+
+    from app.pipeline.gold_impl.ml.sarimax_model import SariMaxModelPipeline
+
+    rows = _sarimax_rows(200, "Manhattan", "yellow")
+
+    feat_dir = tmp_ml / "ml_feat_arima_trips"
+    feat_dir.mkdir(parents=True)
+    spark.createDataFrame(rows).write.mode("overwrite").parquet(str(feat_dir))
+
+    cfg = settings.model_copy(deep=True)
+    cfg.gold.sarimax.forecast_until_year = 2024
+    pipeline1 = SariMaxModelPipeline(cfg)
+    result1 = pipeline1.run()
+    assert result1 > 0
+
+    pipeline2 = SariMaxModelPipeline(cfg)
+    result2 = pipeline2.run()
+    assert result2 == result1, "Idempotency should reuse existing forecast"
+
+
+def test_sarimax_backtest_has_forecast_type(spark, settings, monkeypatch, tmp_path):
+    tmp_gold = tmp_path
+    tmp_ml = tmp_gold / "ml"
+    tmp_ml.mkdir(parents=True)
+    _patch_sarimax(monkeypatch, tmp_gold, tmp_ml)
+
+    from app.pipeline.gold_impl.ml.sarimax_model import SariMaxModelPipeline
+
+    rows = _sarimax_rows(100, "Manhattan", "yellow")
+
+    feat_dir = tmp_ml / "ml_feat_arima_trips"
+    feat_dir.mkdir(parents=True)
+    spark.createDataFrame(rows).write.mode("overwrite").parquet(str(feat_dir))
+
+    pipeline = SariMaxModelPipeline(settings)
+    result = pipeline.run()
+    assert result > 0
+
+    forecast_dir = tmp_ml / "ml_sarimax_trips_forecast"
+    scores_df = spark.read.parquet(str(forecast_dir))
+
+    assert "forecast_type" in scores_df.columns
+    types = [r["forecast_type"] for r in scores_df.select("forecast_type").distinct().collect()]
+    assert types == ["actual"], f"Backtest should only have actual type, got {types}"

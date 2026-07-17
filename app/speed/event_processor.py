@@ -70,16 +70,8 @@ class EventProcessor:
 
     def _check_timeliness(self, event: RideEvent) -> bool:
         now = datetime.now()
-        year, month = now.year, now.month
-
-        month_start = datetime(year, month, 1)
-        if month == 12:
-            next_month_start = datetime(year + 1, 1, 1)
-        else:
-            next_month_start = datetime(year, month + 1, 1)
-
-        lower = month_start - timedelta(days=1)
-        upper = next_month_start + timedelta(days=1)
+        lower = now - timedelta(days=self.config.timeliness_lookback_days)
+        upper = now + timedelta(days=1)
         return lower <= event.pickup_datetime < upper
 
     def _check_datetime_order(self, event: RideEvent) -> bool:

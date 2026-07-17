@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import json
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
+from app.panel.job_manager import JobManager
 from app.serving.merged_view import MergedViewReader
 from app.serving.query_engine import PolarsQueryEngine
 from app.serving.routes import admin, health, historic, realtime
+from app.serving.routes import panel as panel_router
 from app.speed.aggregation import RealtimeAggregator
 from app.speed.event_processor import EventProcessor
 from app.speed.fraud_scorer import FraudScorer
@@ -48,6 +53,7 @@ async def lifespan(app: FastAPI):
     app.state.event_bus = event_bus
     app.state.processor = processor
     app.state.model_loader = model_loader
+    app.state.job_manager = JobManager(engine=app.state.engine)
     app.state.merged_reader = MergedViewReader(
         engine=app.state.engine,
         redis=redis_client,
@@ -71,6 +77,36 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(ingest_router)
     app.include_router(admin.router)
+    app.include_router(panel_router.router)
+
+    _load_geo = lambda name: (
+        json.loads((globals.project_root / f"frontend/public/geo/{name}.geojson").read_text())
+        if (globals.project_root / f"frontend/public/geo/{name}.geojson").exists()
+        else None
+    )
+
+    _geo_boroughs = _load_geo("boroughs")
+    _geo_zones = _load_geo("zones")
+
+    @app.get("/api/v1/geo/boroughs")
+    async def get_boroughs_geo():
+        if _geo_boroughs is None:
+            return JSONResponse({"error": "GeoJSON not found"}, status_code=404)
+        return JSONResponse(_geo_boroughs)
+
+    @app.get("/api/v1/geo/zones")
+    async def get_zones_geo():
+        if _geo_zones is None:
+            return JSONResponse({"error": "GeoJSON not found"}, status_code=404)
+        return JSONResponse(_geo_zones)
+
+    try:
+        frontend_dist = globals.project_root / "frontend/dist"
+        if frontend_dist.exists():
+            app.mount("/panel", StaticFiles(directory=str(frontend_dist), html=True), name="panel")
+    except Exception:
+        pass
+
     return app
 
 

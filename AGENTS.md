@@ -25,6 +25,10 @@ uv run main.py --gold --only mart_demand_volume,ml_feat_isolation_fraud # subset
 uv run main.py --gold-ml kmodes            # train K-Modes (default: cluster trip profiles, needs ml_feat_kmodes_trips first)
 uv run main.py --gold-ml isolation         # train Isolation Forest per RatecodeID (needs ml_feat_isolation_fraud first)
 uv run main.py --gold-ml sarimax           # train SARIMAX trip-count forecaster (needs ml_feat_arima_trips first)
+uv run main.py --download --cat yellow --year 2025 --month 6   # single-month bronze download
+uv run main.py --silver quality --cat yellow --year 2025 --month 6  # single-month silver quality
+uv run main.py --silver load   --cat yellow --year 2025 --month 6   # single-month star-schema load
+uv run main.py --gold --mode incremental --cat yellow --year 2025   # single-year gold (skips existing partitions)
 ```
 
 Order: `bronze → --silver → --silver schema → --silver load → --gold → --gold-ml`. `--silver schema`
@@ -39,7 +43,8 @@ Interrupted runs resume by relaunching the same command.
 ## Serving layer (Lambda architecture)
 
 - **`app.serving/`** — FastAPI app with historic GET endpoints (Polars lazy scans
-  over gold marts) + real-time SSE streams (merged batch + Redis state).
+  over gold marts) + real-time SSE streams (merged batch + Redis state)
+  + **Panel admin API** (17 endpoints under `/api/v1/panel`).
 - **`app.speed/`** — Speed processing engine: `POST /api/v1/ingest` → clean →
   enrich → aggregate (Redis HINCRBY) → fraud score (IsolationForest from joblib).
 - **Redis** — speed layer state (aggregations, uniqueness check via SETNX trip_id).
@@ -59,8 +64,10 @@ Interrupted runs resume by relaunching the same command.
 ### Run
 
 ```bash
-uv run main.py --serve                          # start serving layer
+uv run main.py --serve                          # start serving layer (API + panel backend)
 uv run main.py --speed                          # speed engine only (stdin JSON)
+# Frontend (dev): cd frontend && npm run dev    # Vite on :5173, /api proxied to :8000
+# Frontend (prod): cd frontend && npm run build # FastAPI serves dist/ at /panel
 docker compose up serving redis -d              # Docker
 ```
 
@@ -87,6 +94,11 @@ docker compose up serving redis -d              # Docker
 | `app.utils.storage` | `get_root()`, `get_backend()`, `for_spark()`, `S3Path` | Storage abstraction: local `Path` or S3 (`s3fs`), toggled by `STORAGE_BACKEND` |
 | `app.utils.logger` | `Logger` | Singleton, file+console |
 | `app.utils.globals` | `Globals` (instance: `globals`) | `tlc_categories`: green, yellow, fhv, fhvhv |
+| `app.panel.job_manager` | `JobManager` | Spawn `uv run main.py ...` subprocesses, track state, SSE log streaming |
+| `app.panel.config_io` | `read_config`, `write_config`, `read_env`, `write_env` | Read/write `config.yaml` and `.env` (secret mask) |
+| `app.panel.audit_reader` | `read_audit` | Polars lazy scan of bronze/silver/gold audit.parquet |
+| `app.panel.ml_reader` | `kmodes_summary`, `isolation_scores`, `sarimax_forecast` | ML artifact readers (centers, profiles, tuning, forecasts) |
+| `app.serving.routes.panel` | `router` | 17 admin endpoints: config, env, jobs, audit, ML |
 
 ## Key behaviors
 
@@ -162,6 +174,12 @@ docker compose up serving redis -d              # Docker
   dimensions — the silver cleaner no longer uses them. Gold heuristics live in
   `app/pipeline/gold/feature_rules/` (`time_blocks.py`, `generosity.py`, `ratecode_tariff.py`,
   `passenger_groups.py`) — same rule: define there, don't inline in a mart.
+- **Panel** — React + Vite frontend at `frontend/` served via FastAPI `StaticFiles` at `/panel`.
+  Backend routes at `/api/v1/panel/*` (config, env, jobs with SSE logs, audit, ML readers).
+  Frontend dev: `cd frontend && npm run dev` (Vite :5173, /api proxy to :8000).
+  Production build: `npm run build` → `frontend/dist/` served by the FastAPI app.
+  All mart data queries reuse the existing `/api/v1/historic/*` endpoints (+offset pagination).
+  `JobManager` runs pipeline subprocesses asynchronously; config writes use Pydantic validation.
 - **Spark day-of-week quirk** — use `time_blocks.iso_weekday()` for day-of-week, **not**
   `date_format(ts, "u")` (`'u'` is not day-of-week in Spark's proleptic datetime patterns).
 - **SparkClient** — `master=local[6]` (`local[*]` OOMs the shared 6g heap; 4 left CPU idle — don't raise

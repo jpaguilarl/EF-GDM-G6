@@ -31,7 +31,14 @@ class PolarsQueryEngine:
             )
             self._cache.pop(name, None)
             return None
-        scan = pl.scan_parquet(str(mart_dir))
+        try:
+            scan = pl.scan_parquet(f"{mart_dir}/**/*.parquet", hive_partitioning=True)
+        except Exception:
+            self.logger.warning(
+                f"Mart '{name}' no tiene archivos parquet: {mart_dir}"
+            )
+            self._cache.pop(name, None)
+            return None
         self._cache[name] = (scan, now)
         return scan
 
@@ -43,6 +50,7 @@ class PolarsQueryEngine:
         agg: dict[str, str] | None = None,
         order_by: list[tuple[str, str]] | None = None,
         limit: int | None = None,
+        offset: int | None = None,
     ) -> pl.DataFrame:
         lf = self.get_mart(mart)
         if lf is None:
@@ -78,7 +86,39 @@ class PolarsQueryEngine:
             descending = [direction == "desc" for _, direction in order_by]
             lf = lf.sort(by, descending=descending)
 
-        if limit is not None:
+        if limit is not None and offset is not None:
+            lf = lf.slice(offset, limit)
+        elif limit is not None:
             lf = lf.limit(limit)
+        elif offset is not None:
+            lf = lf.slice(offset)
 
         return lf.collect()
+
+    def invalidate_all(self) -> None:
+        self._cache.clear()
+        self.logger.info("Todos los marts en caché han sido invalidados")
+
+    def count(
+        self,
+        mart: str,
+        filters: dict[str, list | tuple | None] | None = None,
+    ) -> int:
+        lf = self.get_mart(mart)
+        if lf is None:
+            return 0
+        if filters:
+            predicates = []
+            for col_name, values in filters.items():
+                if values is None:
+                    continue
+                if isinstance(values, (list, tuple)):
+                    predicates.append(pl.col(col_name).is_in(values))
+                else:
+                    predicates.append(pl.col(col_name) == values)
+            if predicates:
+                combined = predicates[0]
+                for p in predicates[1:]:
+                    combined = combined & p
+                lf = lf.filter(combined)
+        return lf.select(pl.len()).collect().item()

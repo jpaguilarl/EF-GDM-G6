@@ -10,6 +10,7 @@ class RideEvent(BaseModel):
     dropoff_datetime: datetime | None = None
     pu_location_id: int | None = None
     do_location_id: int | None = None
+    dispatching_base_num: str | None = None
     vendor_id: int | None = None
     ratecode_id: int | None = None
     payment_type_id: int | None = None

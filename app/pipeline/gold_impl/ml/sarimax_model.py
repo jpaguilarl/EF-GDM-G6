@@ -6,7 +6,7 @@ airport-borough, entrena un SARIMAX(1,1,1)(1,1,1,24) por segmento
 
 Output:
 - data/gold/ml/ml_sarimax_trips_forecast/ (particionado por borough, service_id)
-- data/gold/models/sarimax/{borough}__{service_id}/model.joblib + metadata.json
+- data/gold/models/sarimax/{borough}__{service_id}/model.pkl + metadata.json
 """
 
 import json
@@ -92,6 +92,7 @@ def _train_and_score_segment(
     order: tuple,
     seasonal_order: tuple,
     forecast_horizon: int,
+    forecast_until_year: int | None = None,
 ) -> pd.DataFrame:
     borough = str(pdf["borough"].iloc[0])
     service_id = str(pdf["service_id"].iloc[0])
@@ -124,20 +125,27 @@ def _train_and_score_segment(
         out["model_status"] = "skipped_low_rows"
         out["borough"] = borough
         out["service_id"] = service_id
+        out["forecast_type"] = "actual"
         return out
 
-    y = merged["trip_count"].values
-    if forecast_horizon > 0 and n > forecast_horizon:
-        train_end = n - forecast_horizon
-        y_train = y[:train_end]
-        exog_train = exog.iloc[:train_end]
-        y_test = y[train_end:]
-        exog_test = exog.iloc[train_end:]
-    else:
-        y_train = y
+    if forecast_until_year is not None:
+        y_train = merged["trip_count"].values
         exog_train = exog
         y_test = None
         exog_test = None
+    else:
+        y = merged["trip_count"].values
+        if forecast_horizon > 0 and n > forecast_horizon:
+            train_end = n - forecast_horizon
+            y_train = y[:train_end]
+            exog_train = exog.iloc[:train_end]
+            y_test = y[train_end:]
+            exog_test = exog.iloc[train_end:]
+        else:
+            y_train = y
+            exog_train = exog
+            y_test = None
+            exog_test = None
 
     model_status = "ok"
     result = None
@@ -172,6 +180,7 @@ def _train_and_score_segment(
             out["model_status"] = "fit_failed"
             out["borough"] = borough
             out["service_id"] = service_id
+            out["forecast_type"] = "actual"
             return out
 
     aic = float(result.aic)
@@ -185,36 +194,83 @@ def _train_and_score_segment(
     mae = None
     mape = None
 
-    if y_test is not None and len(y_test) > 0:
-        forec = result.get_forecast(steps=len(y_test), exog=exog_test.values)
-        yhat_fc = forec.predicted_mean
-        ci_fc = np.asarray(forec.conf_int(alpha=0.05))
-        ci_fc_lower = ci_fc[:, 0]
-        ci_fc_upper = ci_fc[:, 1]
+    if forecast_until_year is not None:
+        historical = merged[["pickup_hour", "trip_count"]].copy()
+        historical["yhat"] = yhat_ins
+        historical["yhat_lower"] = ci_ins_lower
+        historical["yhat_upper"] = ci_ins_upper
+        historical["model_status"] = model_status
+        historical["borough"] = borough
+        historical["service_id"] = service_id
+        historical["forecast_type"] = "actual"
 
-        yhat_full = np.concatenate([yhat_ins, yhat_fc])
-        yhat_lower_full = np.concatenate([ci_ins_lower, ci_fc_lower])
-        yhat_upper_full = np.concatenate([ci_ins_upper, ci_fc_upper])
-
-        mae = float(np.mean(np.abs(y_test - yhat_fc)))
-        with np.errstate(divide="ignore", invalid="ignore"):
-            mape = float(
-                np.mean(
-                    np.abs((y_test - yhat_fc) / np.maximum(np.abs(y_test), 1.0))
-                )
-                * 100
+        future_steps_count = 0
+        end_date = pd.Timestamp(year=forecast_until_year, month=12, day=31, hour=23)
+        last_hour = merged["pickup_hour"].max()
+        future_hours = pd.date_range(
+            last_hour + pd.Timedelta(hours=1), end_date, freq="h"
+        )
+        future_steps_count = len(future_hours)
+        if future_steps_count > 0:
+            future_exog = _compute_exog_from_timestamps(
+                pd.DatetimeIndex(future_hours), borough
             )
-    else:
-        yhat_full = yhat_ins
-        yhat_lower_full = ci_ins_lower
-        yhat_upper_full = ci_ins_upper
+            forec = result.get_forecast(
+                steps=future_steps_count, exog=future_exog.values
+            )
+            yhat_fc = forec.predicted_mean
+            ci_fc = np.asarray(forec.conf_int(alpha=0.05))
+            ci_fc_lower = ci_fc[:, 0]
+            ci_fc_upper = ci_fc[:, 1]
 
-    merged["yhat"] = yhat_full
-    merged["yhat_lower"] = yhat_lower_full
-    merged["yhat_upper"] = yhat_upper_full
-    merged["model_status"] = model_status
-    merged["borough"] = borough
-    merged["service_id"] = service_id
+            future_df = pd.DataFrame({"pickup_hour": future_hours})
+            future_df["trip_count"] = np.nan
+            future_df["yhat"] = yhat_fc
+            future_df["yhat_lower"] = ci_fc_lower
+            future_df["yhat_upper"] = ci_fc_upper
+            future_df["model_status"] = model_status
+            future_df["borough"] = borough
+            future_df["service_id"] = service_id
+            future_df["forecast_type"] = "forecast"
+
+            out = pd.concat([historical, future_df], ignore_index=True)
+        else:
+            out = historical
+    else:
+        if y_test is not None and len(y_test) > 0:
+            forec = result.get_forecast(steps=len(y_test), exog=exog_test.values)
+            yhat_fc = forec.predicted_mean
+            ci_fc = np.asarray(forec.conf_int(alpha=0.05))
+            ci_fc_lower = ci_fc[:, 0]
+            ci_fc_upper = ci_fc[:, 1]
+
+            yhat_full = np.concatenate([yhat_ins, yhat_fc])
+            yhat_lower_full = np.concatenate([ci_ins_lower, ci_fc_lower])
+            yhat_upper_full = np.concatenate([ci_ins_upper, ci_fc_upper])
+
+            mae = float(np.mean(np.abs(y_test - yhat_fc)))
+            with np.errstate(divide="ignore", invalid="ignore"):
+                mape = float(
+                    np.mean(
+                        np.abs(
+                            (y_test - yhat_fc) / np.maximum(np.abs(y_test), 1.0)
+                        )
+                    )
+                    * 100
+                )
+        else:
+            yhat_full = yhat_ins
+            yhat_lower_full = ci_ins_lower
+            yhat_upper_full = ci_ins_upper
+
+        out = merged[["pickup_hour", "trip_count"]].copy()
+        out["yhat"] = yhat_full
+        out["yhat_lower"] = yhat_lower_full
+        out["yhat_upper"] = yhat_upper_full
+        out["model_status"] = model_status
+        out["borough"] = borough
+        out["service_id"] = service_id
+        out["forecast_type"] = "actual"
 
     model_dir = MODELS_DIR / f"{_fs_safe(borough)}__{_fs_safe(service_id)}"
     model_dir.mkdir(parents=True, exist_ok=True)
@@ -222,26 +278,26 @@ def _train_and_score_segment(
     with storage.open_writable(model_dir / "model.pkl") as f:
         result.save(f, remove_data=True)
 
+    metadata = {
+        "borough": borough,
+        "service_id": service_id,
+        "order": list(actual_order),
+        "seasonal_order": list(actual_seasonal),
+        "model_status": model_status,
+        "n_rows": n,
+        "exog_cols": EXOG_COLS,
+        "aic": aic,
+        "mae": mae,
+        "mape": mape,
+        "trained_at": datetime.now().isoformat(),
+    }
+    if forecast_until_year is not None:
+        metadata["forecast_until_year"] = forecast_until_year
+        metadata["future_steps"] = future_steps_count
     with (model_dir / "metadata.json").open("w") as f:
-        json.dump(
-            {
-                "borough": borough,
-                "service_id": service_id,
-                "order": list(actual_order),
-                "seasonal_order": list(actual_seasonal),
-                "model_status": model_status,
-                "n_rows": n,
-                "exog_cols": EXOG_COLS,
-                "aic": aic,
-                "mae": mae,
-                "mape": mape,
-                "trained_at": datetime.now().isoformat(),
-            },
-            f,
-            indent=2,
-        )
+        json.dump(metadata, f, indent=2)
 
-    return merged[["pickup_hour", "trip_count", "yhat", "yhat_lower", "yhat_upper", "model_status", "borough", "service_id"]]
+    return out[["pickup_hour", "trip_count", "yhat", "yhat_lower", "yhat_upper", "model_status", "borough", "service_id", "forecast_type"]]
 
 
 class SariMaxModelPipeline:
@@ -287,6 +343,7 @@ class SariMaxModelPipeline:
         seasonal_order = tuple(self.sarimax_config.seasonal_order)
         min_rows = self.sarimax_config.min_rows_per_segment
         forecast_horizon = self.sarimax_config.forecast_horizon_hours
+        forecast_until_year = self.sarimax_config.forecast_until_year
 
         segments = (
             data.select("borough", "service_id")
@@ -307,6 +364,7 @@ class SariMaxModelPipeline:
                 StructField("yhat_lower", DoubleType(), True),
                 StructField("yhat_upper", DoubleType(), True),
                 StructField("model_status", StringType(), True),
+                StructField("forecast_type", StringType(), True),
             ]
         )
 
@@ -322,11 +380,31 @@ class SariMaxModelPipeline:
             # forecast del segmento ya existe se reusa (borrar el archivo
             # para re-entrenar). Permite reanudar tras un corte sin repetir
             # los segmentos ya entrenados.
+            # En modo future-forecast (forecast_until_year set), el skip
+            # valida que el archivo existente cubra hasta el año destino.
             safe_b, safe_s = _fs_safe(str(borough_val)), _fs_safe(str(service_val))
             seg_dir = FORECAST_DIR / f"borough={safe_b}" / f"service_id={safe_s}"
             part_path = seg_dir / f"forecast_{safe_b}_{safe_s}.zstd.parquet"
+            skip = False
+            prev_rows = 0
             if part_path.exists():
-                prev_rows = pl.read_parquet(str(part_path)).height
+                if forecast_until_year is not None:
+                    existing_df = pl.read_parquet(str(part_path))
+                    existing_max = existing_df.select(
+                        pl.col("pickup_hour").max()
+                    ).item()
+                    prev_rows = existing_df.height
+                    if existing_max is not None and existing_max.year >= forecast_until_year:
+                        skip = True
+                    else:
+                        self.logger.info(
+                            "    existe pero no cubre hasta "
+                            f"{forecast_until_year}, se re-entrena"
+                        )
+                else:
+                    skip = True
+                    prev_rows = pl.read_parquet(str(part_path)).height
+            if skip:
                 total_rows += prev_rows
                 self.logger.info(
                     f"    ya existe ({prev_rows} horas), se omite"
@@ -347,6 +425,7 @@ class SariMaxModelPipeline:
                 order=order,
                 seasonal_order=seasonal_order,
                 forecast_horizon=forecast_horizon,
+                forecast_until_year=forecast_until_year,
             )
 
             if result_pdf is not None and len(result_pdf) > 0:
@@ -384,6 +463,7 @@ class SariMaxModelPipeline:
             "exog_cols": str(EXOG_COLS),
             "min_rows_per_segment": self.sarimax_config.min_rows_per_segment,
             "forecast_horizon_hours": self.sarimax_config.forecast_horizon_hours,
+            "forecast_until_year": self.sarimax_config.forecast_until_year,
             "rowcount_output": rowcount,
             "started_at": datetime.now().isoformat(),
         }

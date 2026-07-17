@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any
 
 import polars as pl
+import redis.exceptions
 
 from app.serving.query_engine import PolarsQueryEngine
 from app.speed.redis_client import RedisClient
@@ -207,7 +208,10 @@ class MergedViewReader:
             key = sd_key_from_ride(ride, block_seconds)
         else:
             key = config["ride_to_key"](ride)
-        hvals = await self.redis.redis.hgetall(key)
+        try:
+            hvals = await self.redis.redis.hgetall(key)
+        except redis.exceptions.ConnectionError:
+            return None
         if not hvals:
             return None
         parts = key[len(config["prefix"]):].split(":")
@@ -269,15 +273,77 @@ class MergedViewReader:
                 rows.append(row)
         return rows
 
+    async def read_fraud(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        service_id: list[str] | None = None,
+        is_fraud: bool | None = None,
+        ratecode_id: list[int] | None = None,
+    ) -> list[dict[str, Any]]:
+        keys = await self._scan_keys("rt:fraud:*")
+        rows = []
+        for key in keys:
+            hvals = await self.redis.redis.hgetall(key)
+            if not hvals:
+                continue
+            row: dict[str, Any] = {
+                "trip_id": int(hvals.get("trip_id", 0)),
+                "service_id": hvals.get("service_id", ""),
+                "ratecode_id": int(hvals["ratecode_id"]) if hvals.get("ratecode_id", "") else None,
+                "anomaly_score": float(hvals["anomaly_score"]) if hvals.get("anomaly_score", "") else None,
+                "is_fraud": hvals.get("is_fraud") == "True",
+                "is_anomaly_candidate": hvals.get("is_anomaly_candidate") == "True",
+                "timestamp": hvals.get("timestamp", ""),
+            }
+            if service_id and row["service_id"] not in service_id:
+                continue
+            if is_fraud is not None and row["is_fraud"] != is_fraud:
+                continue
+            if ratecode_id and row["ratecode_id"] not in ratecode_id:
+                continue
+            rows.append(row)
+
+        rows.sort(key=lambda r: str(r.get("timestamp", "")), reverse=True)
+        return rows[offset:offset + limit]
+
+    async def read_clusters(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        service_id: list[str] | None = None,
+        cluster_id: list[int] | None = None,
+    ) -> list[dict[str, Any]]:
+        keys = await self._scan_keys("rt:cluster:*")
+        rows = []
+        for key in keys:
+            hvals = await self.redis.redis.hgetall(key)
+            if not hvals:
+                continue
+            row: dict[str, Any] = {
+                "trip_id": int(key.split(":")[-1]),
+                "cluster_id": int(hvals.get("cluster_id", 0)),
+                "service_id": hvals.get("service_id", ""),
+            }
+            if service_id and row["service_id"] not in service_id:
+                continue
+            if cluster_id and row["cluster_id"] not in cluster_id:
+                continue
+            rows.append(row)
+        return rows[offset:offset + limit]
+
     async def _scan_keys(self, pattern: str) -> list[str]:
-        keys = []
-        cursor = 0
-        while True:
-            cursor, batch = await self.redis.redis.scan(cursor=cursor, match=pattern, count=1000)
-            keys.extend(batch)
-            if cursor == 0:
-                break
-        return keys
+        try:
+            keys = []
+            cursor = 0
+            while True:
+                cursor, batch = await self.redis.redis.scan(cursor=cursor, match=pattern, count=1000)
+                keys.extend(batch)
+                if cursor == 0:
+                    break
+            return keys
+        except redis.exceptions.ConnectionError:
+            return []
 
     @staticmethod
     def _matches_filters(row: dict, filter_cols: dict) -> bool:

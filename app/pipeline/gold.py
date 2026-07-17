@@ -145,8 +145,11 @@ class GoldPipeline:
                     for m in range(1, 13):
                         targets.append((cat, y, m))
             elif isinstance(y, Module):
-                for m in range(1, 13):
-                    targets.append((y.category, y.year, m))
+                if y.month is not None:
+                    targets.append((y.category, y.year, y.month))
+                else:
+                    for m in range(1, 13):
+                        targets.append((y.category, y.year, m))
         return targets
 
     def _latest_silver_audit_id(self, spark) -> str:

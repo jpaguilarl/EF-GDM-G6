@@ -21,8 +21,9 @@ from app.pipeline.gold_impl.mart_builder import GOLD_DIMS_DIR, SILVER_DIMS_DIR
 from app.utils import storage
 from app.utils.logger import Logger
 
-# date_keys (YYYYMMDD) de feriados federales observados en NYC, 2023-2025.
+# date_keys (YYYYMMDD) de feriados federales observados en NYC, 2023-2027.
 # Alimenta is_holiday (variable exogena para ARIMA y filtros de dashboards).
+# 2026+ necesarios para forecast futuro de SARIMAX (exog is_holiday).
 HOLIDAY_DATE_KEYS: set[int] = {
     # 2023
     20230101, 20230116, 20230220, 20230529, 20230619, 20230704,
@@ -33,6 +34,12 @@ HOLIDAY_DATE_KEYS: set[int] = {
     # 2025
     20250101, 20250120, 20250217, 20250526, 20250619, 20250704,
     20250901, 20251013, 20251111, 20251127, 20251225,
+    # 2026
+    20260101, 20260119, 20260216, 20260525, 20260619, 20260704,
+    20260907, 20261012, 20261111, 20261126, 20261225,
+    # 2027
+    20270101, 20270118, 20270215, 20270531, 20270618, 20270705,
+    20270906, 20271011, 20271111, 20271125, 20271225,
 }
 
 # Borough (ingles, fuente TLC) -> nombre para Power BI en español.

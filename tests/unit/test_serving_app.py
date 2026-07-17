@@ -19,7 +19,7 @@ class TestCreateApp:
         from app.serving.app import create_app
         app = create_app()
         included = [r for r in app.routes if type(r).__name__ == "_IncludedRouter"]
-        assert len(included) == 5
+        assert len(included) == 6
 
     def test_engine_set_before_lifespan(self):
         from app.serving.app import create_app
