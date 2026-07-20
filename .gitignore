@@ -5,6 +5,8 @@ logs/
 airflow-logs/
 __pycache__
 .env
+AGENTS.md
+CLAUDE.md
 powerbi/GUIA_DASHBOARD.md
 powerbi/GUION_EXPOSICION.md
 powerbi/GUION_ARQUITECTURA.md
